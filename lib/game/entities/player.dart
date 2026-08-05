@@ -42,7 +42,7 @@ class Player extends IsoEntity with Damageable {
   ///
   /// 몬스터가 주는 피해가 곧 그 몬스터의 레벨이므로(1~200), 이 값은
   /// "레벨 N 몬스터에게 몇 대까지 버티는가"를 그대로 뜻한다.
-  static const double baseMaxHp = 10000;
+  static const double baseMaxHp = 5000;
 
   double _hp = baseMaxHp;
   double _maxHp = baseMaxHp;
