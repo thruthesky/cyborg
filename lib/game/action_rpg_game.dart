@@ -29,6 +29,7 @@ import 'net/game_sync.dart';
 import 'net/leaderboard_source.dart';
 import 'palette.dart';
 import 'systems/auto_hunt.dart';
+import 'systems/camera_zoom.dart';
 import 'systems/drop_table.dart';
 import 'systems/hit_stop.dart';
 import 'systems/inventory.dart';
@@ -44,6 +45,7 @@ import 'ui/leaderboard_screen.dart';
 import 'ui/teleport_sheet.dart';
 import 'ui/touch_controls.dart';
 import 'ui/world_menu.dart';
+import 'ui/zoom_control.dart';
 
 /// 게임의 진행 상태.
 enum GameStatus { ready, playing, paused, gameOver }
@@ -149,6 +151,12 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     aliveOf: (enemy) => enemy.isAlive,
   );
 
+  /// 플레이어가 고른 시야 배율. 확대·축소 버튼([ZoomControl])이 이것을 옮긴다.
+  ///
+  /// 게임이 들고 있으므로 죽고 다시 태어나도, 창 크기를 바꿔도 고른 배율이
+  /// 그대로 남는다.
+  final CameraZoom cameraZoom = CameraZoom();
+
   /// 청크 키(cy * chunksX + cx) → 그 청크에서 마운트한 구조물들.
   final Map<int, List<BlockComponent>> _loadedBlocks = {};
 
@@ -240,7 +248,7 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     world.add(player);
 
     camera.backdrop = CyberBackdrop();
-    camera.viewfinder.zoom = _zoomForSize(size);
+    camera.viewfinder.zoom = cameraZoom.zoomFor(size.y);
     camera.viewfinder.position = _cameraTarget();
 
     _hud = Hud();
@@ -273,17 +281,41 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
       ..restoreProgress(totalXp: _carriedTotalXp);
   }
 
-  double _zoomForSize(Vector2 screenSize) {
-    // 세로 기준 약 760px 분량의 월드가 보이도록 맞춘다.
-    final zoom = screenSize.y / 760;
-    return zoom.clamp(0.55, 1.6);
+  /// 화면 크기와 플레이어가 고른 배율을 함께 카메라에 반영한다.
+  ///
+  /// 배율이 바뀌면 화면에 담기는 월드 넓이가 달라지므로, 가장자리에 붙어 있을
+  /// 때 허공이 드러나지 않도록 카메라 위치도 다시 가둔다.
+  void _applyCameraZoom() {
+    camera.viewfinder.zoom = cameraZoom.zoomFor(size.y);
+    camera.viewfinder.position = _clampToWorld(camera.viewfinder.position);
+  }
+
+  /// 한 단계 당긴다. 더 갈 수 없으면 소리로만 알린다.
+  void zoomIn() => _stepZoom(cameraZoom.zoomIn());
+
+  /// 한 단계 물러난다. 더 갈 수 없으면 소리로만 알린다.
+  void zoomOut() => _stepZoom(cameraZoom.zoomOut());
+
+  void _stepZoom(bool changed) {
+    if (!changed) {
+      // 눌렸는데 아무 변화가 없으면 고장으로 보인다. 자동 사냥 반경 조절과
+      // 같은 방식으로 상·하한을 소리로 알린다.
+      GameAudio.play(Sfx.uiError);
+      return;
+    }
+    _applyCameraZoom();
+    GameAudio.play(Sfx.uiClick);
+    // 넓어진 시야에 아직 실체가 없는 구역이 들어왔을 수 있다. 다음 주기를
+    // 기다리지 않고 곧바로 채운다.
+    _refreshBlockStreaming();
+    _refreshMonsterStreaming();
   }
 
   @override
   void onGameResize(Vector2 newSize) {
     super.onGameResize(newSize);
     if (isLoaded) {
-      camera.viewfinder.zoom = _zoomForSize(newSize);
+      _applyCameraZoom();
       _layoutTouchControls();
     }
   }
@@ -384,6 +416,7 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     camera.viewport.addAll([
       PotionQuickBar(),
       BuffBar(),
+      ZoomControl(),
       _worldMenu,
       _inventoryPanel,
       _characterScreen,
