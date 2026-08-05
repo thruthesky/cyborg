@@ -76,12 +76,14 @@ class ActionButton extends PositionComponent
 
   @override
   void onDragStart(DragStartEvent event) {
+    super.onDragStart(event);
     event.handled = true;
     _trigger();
   }
 
   @override
   void onDragEnd(DragEndEvent event) {
+    super.onDragEnd(event);
     _held = false;
   }
 

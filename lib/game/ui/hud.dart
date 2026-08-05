@@ -8,7 +8,6 @@ import '../action_rpg_game.dart';
 import '../entities/pickup.dart';
 import '../level/level_map.dart';
 import '../palette.dart';
-import '../systems/level_system.dart';
 
 /// 화면에 고정되어 표시되는 게임 정보 패널.
 class Hud extends PositionComponent with HasGameReference<ActionRpgGame> {
