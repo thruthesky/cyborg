@@ -323,10 +323,18 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   // ── 터치 컨트롤 ─────────────────────────────────────────────────────
 
   void _addTouchControls() {
+    const knobRadius = 26.0;
     final joystick = JoystickComponent(
-      knob: JoystickKnob(radius: 26),
-      background: JoystickBase(radius: 62),
-      margin: const EdgeInsets.only(left: 40, bottom: 40),
+      knob: JoystickKnob(radius: knobRadius),
+      background: JoystickBase(radius: _joystickRadius),
+      // 손잡이가 배경 밖으로 나가지 않도록 이동 반경을 배경 반경에서 손잡이
+      // 반경만큼 뺀다. 기본값(배경 반경)을 그대로 쓰면 끝까지 밀었을 때 손잡이가
+      // 절반이나 링 밖으로 튀어나가 위에 세워 둔 배율 버튼까지 덮는다.
+      knobRadius: _joystickRadius - knobRadius,
+      margin: const EdgeInsets.only(
+        left: _joystickMargin,
+        bottom: _joystickMargin,
+      ),
       priority: 90,
     );
     _joystick = joystick;
@@ -452,14 +460,27 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     // 탭 차폐막을 조이스틱·HUD 패널 위에 다시 맞춘다.
     for (final shield in camera.viewport.children.whereType<TapShield>()) {
       if (shield.anchor == Anchor.center) {
-        // 조이스틱: 좌하단 여백 40 + 배경 반경 62.
-        shield.position = Vector2(_joystickRadius + 40, size.y - _joystickRadius - 40);
+        shield.position = _joystickCenter;
       }
     }
   }
 
-  /// 가상 조이스틱 배경의 반경. 탭 차폐막 크기를 맞추는 데 쓴다.
+  /// 가상 조이스틱 배경의 반경. 손잡이 이동 반경과 탭 차폐막 크기를 여기에
+  /// 맞춘다.
   static const double _joystickRadius = 62;
+
+  /// 조이스틱 배경과 화면 좌·하단 사이의 여백.
+  static const double _joystickMargin = 40;
+
+  /// 화면 좌표계에서 조이스틱의 중심.
+  ///
+  /// `ComponentViewportMargin` 이 여백에서 계산해 두는 자리와 같아야 한다.
+  /// 어긋나면 차폐막이 조이스틱을 덜 덮어, 가장자리를 짚을 때마다 그 탭이
+  /// 월드로 새어 캐릭터가 엉뚱한 곳으로 걸어간다.
+  Vector2 get _joystickCenter => Vector2(
+        _joystickMargin + _joystickRadius,
+        size.y - _joystickMargin - _joystickRadius,
+      );
 
   /// 조이스틱·HUD 위의 탭이 월드로 새지 않도록 차폐막을 덮는다.
   ///
@@ -470,7 +491,7 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     camera.viewport.addAll([
       // 조이스틱
       TapShield(
-        position: Vector2(_joystickRadius + 40, size.y - _joystickRadius - 40),
+        position: _joystickCenter,
         size: Vector2.all(_joystickRadius * 2),
         anchor: Anchor.center,
       ),
