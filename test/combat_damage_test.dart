@@ -125,11 +125,12 @@ void main() {
       expect(healers, {...grades.keys, PickupKind.combatStim});
     });
 
-    test('어느 등급도 1레벨 최대 체력의 20%를 넘지 못한다', () {
+    test('어느 등급도 1레벨 최대 체력의 40%를 넘지 못한다', () {
       // 물약 한 병으로 판세가 뒤집히지 않아야 한다.
-      // 체력 풀을 절반으로 낮추면서 최상급 물약의 몫이 10% → 20% 로 올라갔다.
+      // 체력 풀을 두 차례 절반으로 낮추면서 최상급 물약의 몫이
+      // 10% → 20% → 40% 로 올라갔다. 회복량 자체는 손대지 않았다.
       for (final heal in grades.values) {
-        expect(heal / Player.baseMaxHp, lessThanOrEqualTo(0.2));
+        expect(heal / Player.baseMaxHp, lessThanOrEqualTo(0.4));
       }
     });
 
@@ -165,24 +166,24 @@ void main() {
   });
 
   group('체력 성장', () {
-    test('레벨업 한 번에 최대 체력이 500 늘어난다', () {
+    test('레벨업 한 번에 최대 체력이 250 늘어난다', () {
       // 강화 구간(5의 배수)이라고 더 주지 않는다.
       for (var level = 2; level <= 200; level++) {
         expect(
           LevelSystem.gainsFor(level).maxHp,
-          500,
-          reason: '레벨 $level 의 체력 성장폭이 500이 아니다',
+          250,
+          reason: '레벨 $level 의 체력 성장폭이 250이 아니다',
         );
       }
     });
 
-    test('레벨 N의 최대 체력은 5,000 + (N-1) × 500 이다', () {
+    test('레벨 N의 최대 체력은 2,500 + (N-1) × 250 이다', () {
       var maxHp = Player.baseMaxHp;
       for (var level = 2; level <= 50; level++) {
         maxHp += LevelSystem.gainsFor(level).maxHp;
         expect(
           maxHp,
-          Player.baseMaxHp + (level - 1) * 500,
+          Player.baseMaxHp + (level - 1) * 250,
           reason: '레벨 $level 의 누적 최대 체력이 어긋난다',
         );
       }
