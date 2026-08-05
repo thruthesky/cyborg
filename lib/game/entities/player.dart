@@ -13,11 +13,13 @@ import '../systems/buff.dart';
 import '../systems/inventory.dart';
 import '../systems/level_system.dart';
 import '../systems/rest_recovery.dart';
+import '../systems/weapon.dart';
 import 'cyborg_design.dart';
 import 'cyborg_renderer.dart';
 import 'iso_entity.dart';
 import 'pickup.dart';
 import 'projectile.dart';
+import 'weapon_art.dart';
 
 /// 플레이어의 현재 행동 상태.
 enum PlayerState { idle, run, melee, dash, hurt, dead }
@@ -71,6 +73,42 @@ class Player extends IsoEntity with Damageable {
   double rangedDamage = 18;
   double moveSpeed = 3.6; // 초당 타일 수
 
+  /// 맨몸의 기본 무기. **레벨이 오르면 함께 강화된다.**
+  ///
+  /// 저장하지 않고 [level] 에서 만들어 낸다 — [totalXp] 하나로 레벨과 진행도를
+  /// 유도하는 것과 같은 이유다. 서버가 주고받는 것도 누적 경험치뿐이라, 이
+  /// 무기는 같은 월드의 모든 클라이언트가 똑같이 그려 낼 수 있다.
+  Weapon _innate = WeaponSystem.forLevel(1);
+
+  /// 로봇 잔해에서 주워 든 무기. 아무것도 줍지 않았으면 null이다.
+  ///
+  /// 이쪽은 서버가 모르는 값이라 남의 화면에는 [_innate] 로 보인다
+  /// (`GAME-DESIGN.md` 12.4 참고).
+  Weapon? _found;
+
+  /// 지금 실제로 손에 든 무기.
+  ///
+  /// **기본 무기와 주운 무기 중 센 쪽이다.** 어느 하나를 "장착 상태"로 따로
+  /// 들고 있지 않는 것이 요점이다 — 그러면 레벨이 자라 기본 무기가 주운 것을
+  /// 앞질렀는데도 옛 무기를 든 상태가 생기고, 그 어긋남을 지우려면 레벨업마다
+  /// 장착을 다시 손봐야 한다. 매번 견주면 그런 상태 자체가 없다.
+  Weapon get weapon {
+    final found = _found;
+    return found != null && found.dps > _innate.dps ? found : _innate;
+  }
+
+  /// 주운 무기를 든다. 지금 든 것보다 세지 않으면 들지 않고 false.
+  ///
+  /// 견주는 값이 위력이 아니라 [Weapon.dps] 인 것이 요점이다. 위력만 보면
+  /// 느리게 한 대씩 때리는 망치가 언제나 이겨, 계통이 맞바꿈이 아니라 서열이
+  /// 된다. 속도와 콤보까지 곱한 값으로 견주면 계통은 서로 대등해지고, 실제로
+  /// 무기를 가르는 것은 레벨과 벼림이 된다.
+  bool equipFoundWeapon(Weapon dropped) {
+    if (dropped.dps <= weapon.dps) return false;
+    _found = dropped;
+    return true;
+  }
+
   /// 방어력. 받는 피해를 [defenseConstant] 기준의 승수로 깎는다.
   ///
   /// 기본값은 0이며, 이때 받는 피해는 때린 몬스터의 레벨과 정확히 같다.
@@ -107,11 +145,30 @@ class Player extends IsoEntity with Damageable {
   @override
   double get maxHp => _maxHp;
 
-  /// 버프가 반영된 근접 피해량.
-  double get effectiveMeleeDamage => meleeDamage * buffs.damageMultiplier;
+  /// 무기 위력과 버프가 반영된 근접 피해량.
+  ///
+  /// 계통의 몫이 여기에만 곱해진다. 망치의 ×1.32 는 한 대가 크다는 뜻이지
+  /// 캐릭터가 강하다는 뜻이 아니다 — 그만큼 느리게 휘두르므로 초당 피해는
+  /// 다른 계통과 같다([WeaponClass] 참고).
+  double get effectiveMeleeDamage =>
+      meleeDamage *
+      weapon.power *
+      weapon.weaponClass.damage *
+      buffs.damageMultiplier;
 
-  /// 버프가 반영된 원거리 피해량.
-  double get effectiveRangedDamage => rangedDamage * buffs.damageMultiplier;
+  /// 무기 위력과 버프가 반영된 원거리 피해량.
+  ///
+  /// 플라즈마 볼트도 같은 무기에서 나간다. 칼과 총을 따로 두지 않는 이유는
+  /// 이 사이보그의 팔 자체가 무기이기 때문이다 — 칼날을 뽑는 것과 볼트를
+  /// 쏘는 것은 같은 방출기의 두 가지 출력이다.
+  double get effectiveRangedDamage =>
+      rangedDamage * weapon.power * buffs.damageMultiplier;
+
+  /// 무기가 더해 준 몫까지 포함한 실제 근접 사거리(타일).
+  ///
+  /// 자동 사냥이 접근 거리를 정할 때도 이 값을 읽는다. [meleeRange] 를 직접
+  /// 쓰면 무기가 길어진 만큼 필요 없이 더 붙는다.
+  double get meleeReach => meleeRange + weapon.reachBonus;
 
   /// 버프가 반영된 이동 속도.
   double get effectiveMoveSpeed => moveSpeed * buffs.speedMultiplier;
@@ -151,6 +208,9 @@ class Player extends IsoEntity with Damageable {
 
   double _animTime = 0;
   double _meleeTimer = 0;
+
+  /// 지금 휘두르는 한 번에 걸리는 시간. 무기 계통의 속도에서 나온다.
+  double _meleeSpan = _meleeDuration;
   double _meleeCooldown = 0;
   double _shootCooldown = 0;
   double _dashTimer = 0;
@@ -166,12 +226,17 @@ class Player extends IsoEntity with Damageable {
 
   static const double _meleeDuration = 0.32;
 
-  /// 근접 공격이 닿는 거리(타일). 대상의 몸 반경은 여기에 더해 판정한다.
+  /// 맨몸의 근접 사거리(타일). 대상의 몸 반경은 여기에 더해 판정한다.
   ///
-  /// 자동 사냥이 "얼마나 붙어야 때릴 수 있는지" 를 알아야 하므로 공개한다.
-  /// 이 값과 실제 판정이 어긋나면 닿지도 않는 자리에서 계속 헛스윙한다.
+  /// 실제로 닿는 거리는 무기 길이가 더해진 [meleeReach] 다. 판정도 자동
+  /// 사냥의 접근 거리도 그쪽을 읽어야 한다 — 둘이 어긋나면 닿지도 않는
+  /// 자리에서 계속 헛스윙한다.
   static const double meleeRange = 1.5;
-  static const double _dashDuration = 0.18;
+  /// 대시가 지속되는 시간. [_dashSpeed] 와 곱한 만큼(약 3.4 타일) 미끄러진다.
+  ///
+  /// 무적 시간도 여기서 파생되므로(대시 시간 + 0.08) 이 값을 늘리면 PK 에서
+  /// 회피로 버티는 구간도 같이 길어진다.
+  static const double _dashDuration = 0.26;
   static const double _dashSpeed = 13.0;
 
   bool get isDashing => _dashTimer > 0;
@@ -181,20 +246,31 @@ class Player extends IsoEntity with Damageable {
 
   // ── 입력 진입점 ─────────────────────────────────────────────────────
 
-  /// 근접 공격(에너지 블레이드)을 시도한다.
+  /// 근접 공격을 시도한다. 무엇을 어떻게 휘두를지는 무기 계통이 정한다.
   void tryMelee() {
     if (!isAlive || _meleeCooldown > 0 || isDashing) return;
-    _comboStep = _comboWindow > 0 ? (_comboStep + 1) % 3 : 0;
+    final weaponClass = weapon.weaponClass;
+    _comboStep =
+        _comboWindow > 0 ? (_comboStep + 1) % weaponClass.comboLength : 0;
     _comboWindow = 0.65;
-    _meleeTimer = _meleeDuration;
-    _meleeCooldown = _meleeDuration + 0.06;
+    // 계통마다 한 번의 스윙에 걸리는 시간이 다르다. 시작할 때 재어 두는 이유는
+    // 휘두르는 도중에 무기가 바뀌어도 이번 스윙의 진행도가 튀지 않게 하기
+    // 위해서다 — 그림과 판정 시점이 같은 값을 봐야 한다.
+    _meleeSpan = _meleeDuration / weaponClass.speed;
+    _meleeTimer = _meleeSpan;
+    _meleeCooldown = _meleeSpan + 0.06;
     _meleeHitApplied = false;
     state = PlayerState.melee;
-    // 콤보 마무리는 더 묵직한 스윙음으로 구분한다.
+    // 콤보 마무리는 더 묵직한 스윙음으로 구분한다. 망치는 매 타가 묵직하다.
     GameAudio.play(
-      _comboStep == 2 ? Sfx.bladeSwingHeavy : Sfx.bladeSwing,
+      _isFinisher || weaponClass == WeaponClass.maul
+          ? Sfx.bladeSwingHeavy
+          : Sfx.bladeSwing,
     );
   }
+
+  /// 지금 타가 콤보의 마무리인지. 계통마다 콤보 길이가 다르다.
+  bool get _isFinisher => _comboStep == weapon.weaponClass.comboLength - 1;
 
   /// 한 발에 드는 마력.
   ///
@@ -220,6 +296,8 @@ class Player extends IsoEntity with Damageable {
         damage: effectiveRangedDamage,
         owner: ProjectileOwner.player,
         z: 0.62,
+        // 볼트도 같은 방출기에서 나가므로 무기 색을 그대로 띤다.
+        color: weapon.glow,
       ),
     );
     game.shakeCamera(2.5, 0.08);
@@ -449,9 +527,13 @@ class Player extends IsoEntity with Damageable {
       state = moveInput.length2 > 0.001 ? PlayerState.run : PlayerState.idle;
       return;
     }
-    // 스윙 중반에 한 번만 판정한다.
-    final progress = 1 - (_meleeTimer / _meleeDuration);
-    if (!_meleeHitApplied && progress >= 0.35) {
+    // 스윙 중반에 한 번만 판정한다. 망치는 머리가 바닥에 닿는 순간이라 늦다 —
+    // 그림이 그 시점을 그리므로 판정도 같은 값을 읽어야 한다.
+    final progress = 1 - (_meleeTimer / _meleeSpan);
+    final hitAt = weapon.weaponClass == WeaponClass.maul
+        ? WeaponArt.maulImpact
+        : 0.35;
+    if (!_meleeHitApplied && progress >= hitAt) {
       _meleeHitApplied = true;
       _resolveMeleeHit();
     }
@@ -459,8 +541,12 @@ class Player extends IsoEntity with Damageable {
 
   void _resolveMeleeHit() {
     final dir = facing.normalized();
-    final comboBonus = _comboStep == 2 ? 1.6 : 1.0;
+    final finisher = _isFinisher;
+    final comboBonus = finisher ? 1.6 : 1.0;
     final damage = effectiveMeleeDamage * comboBonus;
+    final reach = meleeReach;
+    // 부채꼴의 넓이는 계통이 정한다. 창은 겨눈 하나만, 리퍼는 사방을 친다.
+    final arcDot = weapon.weaponClass.arcDot;
     var hitAny = false;
 
     for (final target in game.meleeTargets()) {
@@ -469,32 +555,35 @@ class Player extends IsoEntity with Damageable {
       if (!target.isAlive) continue;
       final toTarget = target.grid - grid;
       final distance = toTarget.length;
-      if (distance > meleeRange + target.bodyRadius) continue;
+      if (distance > reach + target.bodyRadius) continue;
       if (distance > 0.001) {
         final alignment = toTarget.normalized().dot(dir);
-        // 전방 약 120도 부채꼴.
-        if (alignment < 0.35) continue;
+        if (alignment < arcDot) continue;
       }
       hitAny = true;
       final knock = distance > 0.001 ? toTarget.normalized() : dir;
       target.applyDamage(
         damage,
-        knockback: knock * (_comboStep == 2 ? 3.4 : 1.9),
-        critical: _comboStep == 2,
+        knockback: knock * (finisher ? 3.4 : 1.9),
+        critical: finisher,
       );
       game.spawnEffect(
         HitSpark(
           grid: target.grid.clone(),
           z: 0.55,
-          color: GamePalette.bladeGlow,
+          // 불꽃도 지금 든 무기의 색으로 튄다. 칼날만 바뀌고 타격 불꽃이
+          // 옛 색이면 두 그림이 서로 다른 무기를 말하게 된다.
+          color: weapon.glow,
         ),
       );
     }
 
     if (hitAny) {
-      game.shakeCamera(_comboStep == 2 ? 8 : 4, 0.12);
+      // 망치의 착탄은 그 자체가 사건이라 흔들림을 한 단 더 준다.
+      final heavy = finisher || weapon.weaponClass == WeaponClass.maul;
+      game.shakeCamera(heavy ? 8 : 4, 0.12);
       energy = math.min(maxEnergy, energy + 4);
-      GameAudio.play(_comboStep == 2 ? Sfx.meleeCrit : Sfx.meleeHit);
+      GameAudio.play(finisher ? Sfx.meleeCrit : Sfx.meleeHit);
     }
   }
 
@@ -785,6 +874,13 @@ class Player extends IsoEntity with Damageable {
     }
     xpToNextLevel = LevelSystem.xpToNext(level);
     xp = LevelSystem.progressWithin(this.totalXp);
+    // 무기도 함께 따라온다. 25 레벨로 접속했는데 1 레벨 무기를 들고 있으면
+    // 스탯은 25 레벨인데 화면에는 초보의 칼이 보인다.
+    //
+    // 주워 든 무기는 여기서 버린다. 서버가 보관하는 것은 누적 경험치뿐이라
+    // 지난 접속에서 주운 무기는 어차피 되살릴 값이 없다.
+    _innate = WeaponSystem.forLevel(level);
+    _found = null;
 
     // 복원 직후에는 만신창이가 아니라 온전한 몸으로 시작한다.
     _hp = _maxHp;
@@ -808,6 +904,17 @@ class Player extends IsoEntity with Damageable {
     _applyGains(gains);
     xpToNextLevel = LevelSystem.xpToNext(level);
 
+    // 레벨업 한 번은 곧 무기 강화 한 번이다. 등급까지 바뀌었는지는 새 무기와
+    // 옛 무기를 견줘서 안다 — 경계 레벨을 여기서 다시 세면 표와 어긋난다.
+    //
+    // 견주는 것은 **실제로 손에 든 무기**다. 주운 무기가 아직 더 세다면 기본
+    // 무기의 등급이 올라도 화면의 칼은 그대로이므로, 그때 "무기가 바뀌었다"고
+    // 알리면 바뀌지 않은 것을 알리는 셈이 된다.
+    final held = weapon;
+    _innate = WeaponSystem.forLevel(level);
+    final forged = weapon;
+    final gradeUp = forged.gradeIndex != held.gradeIndex;
+
     // 레벨업하면 완전히 회복하고 잠깐 무적이 된다.
     _hp = _maxHp;
     energy = maxEnergy;
@@ -821,9 +928,22 @@ class Player extends IsoEntity with Damageable {
         color: GamePalette.xpGlow,
       ),
     );
+    // 새 등급의 무기는 그 무기 색으로 한 번 더 터뜨린다. 경험치 보라색만
+    // 쓰면 등급이 바뀐 순간과 그냥 레벨이 오른 순간이 구분되지 않는다.
+    if (gradeUp) {
+      game.spawnEffect(
+        HitSpark(
+          grid: grid.clone(),
+          z: 0.75,
+          color: forged.glow,
+          count: 12,
+          spread: 40,
+        ),
+      );
+    }
     GameAudio.play(Sfx.levelUp);
     // 배너와 화면 흔들림 등 연출은 게임 본체가 담당한다.
-    game.onLevelUp(level, milestone: gains.milestone);
+    game.onLevelUp(level, milestone: gains.milestone, weaponGradeUp: gradeUp);
   }
 
   // ── 렌더링 ──────────────────────────────────────────────────────────
@@ -852,7 +972,7 @@ class Player extends IsoEntity with Damageable {
     _drawFrame(canvas);
 
     if (state == PlayerState.melee) {
-      _renderBladeSwing(canvas);
+      _renderWeaponSwing(canvas);
     }
   }
 
@@ -955,62 +1075,31 @@ class Player extends IsoEntity with Damageable {
       swing: swing,
       armSwing: running ? -swing * 6 : 0,
       time: _animTime,
+      // 등에 멘 칼과 손의 방출기가 지금 등급을 그대로 드러낸다. 휘두를 때만
+      // 등급이 보이면 서 있는 다른 플레이어의 무기는 알 수 없다.
+      weapon: weapon,
     );
   }
 
-  /// 에너지 블레이드 스윙 궤적.
-  void _renderBladeSwing(Canvas canvas) {
+  /// 근접 공격의 궤적.
+  ///
+  /// 실제로 그리는 일은 [WeaponArt] 가 맡는다. 계통마다 궤적의 성격이 통째로
+  /// 다르므로(베기·내리찍기·찌르기·회전) 여기서는 **언제 어느 방향으로** 휘두르는
+  /// 중인지만 정해 넘긴다. 길이·굵기·색·표면 무늬는 모두 [weapon] 에서 읽히므로,
+  /// 무기가 바뀌는 순간 스윙 자체가 눈에 띄게 달라진다 — 숫자만 오르고 그림이
+  /// 그대로면 "무기가 바뀌었다"는 화면에 존재하지 않는 사실이 된다.
+  void _renderWeaponSwing(Canvas canvas) {
     final progress =
-        (1 - (_meleeTimer / _meleeDuration)).clamp(0.0, 1.0).toDouble();
+        (1 - (_meleeTimer / _meleeSpan)).clamp(0.0, 1.0).toDouble();
     final screenDir = gridDirToScreenDir(facing.normalized())..normalize();
-    final baseAngle = math.atan2(screenDir.y, screenDir.x);
 
-    // 콤보 단계마다 스윙 방향을 바꿔 리듬감을 준다.
-    final reverse = _comboStep == 1;
-    final sweep = _comboStep == 2 ? math.pi * 1.6 : math.pi * 1.05;
-    final start = reverse ? sweep / 2 : -sweep / 2;
-    final angle = baseAngle + (reverse ? start - sweep * progress
-        : start + sweep * progress);
-
-    final pivot = Offset(0, -52);
-    final length = _comboStep == 2 ? 74.0 : 62.0;
-    final fade = math.sin(progress * math.pi);
-
-    // 궤적(호)
-    final trailPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 16 * fade
-      ..strokeCap = StrokeCap.round
-      ..color = GamePalette.bladeGlow.withValues(alpha: 0.35 * fade)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
-    final trailSweep = (reverse ? -1 : 1) * sweep * progress;
-    canvas.drawArc(
-      Rect.fromCircle(center: pivot, radius: length * 0.78),
-      baseAngle + start,
-      trailSweep,
-      false,
-      trailPaint,
-    );
-
-    // 칼날
-    final tip = pivot + Offset(math.cos(angle), math.sin(angle)) * length;
-    final hilt = pivot + Offset(math.cos(angle), math.sin(angle)) * 18;
-    canvas.drawLine(
-      hilt,
-      tip,
-      Paint()
-        ..strokeWidth = 9
-        ..strokeCap = StrokeCap.round
-        ..color = GamePalette.bladeGlow.withValues(alpha: 0.6)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
-    );
-    canvas.drawLine(
-      hilt,
-      tip,
-      Paint()
-        ..strokeWidth = 3.4
-        ..strokeCap = StrokeCap.round
-        ..color = GamePalette.bladeCore,
+    WeaponArt.drawSwing(
+      canvas,
+      weapon: weapon,
+      progress: progress,
+      baseAngle: math.atan2(screenDir.y, screenDir.x),
+      comboStep: _comboStep,
+      finisher: _isFinisher,
     );
   }
 
