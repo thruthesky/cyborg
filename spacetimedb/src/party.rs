@@ -985,6 +985,40 @@ pub(crate) fn on_character_left(ctx: &ReducerContext, character_id: u64) {
     }
 }
 
+/// 두 캐릭터가 같은 파티인가. **파티원끼리는 서로 칠 수 없다**의 판정이다.
+///
+/// PK 는 여전히 허용된다([`crate::world::attack_player`]). 막는 것은 함께 다니기로
+/// 한 사이뿐이다 — 같은 몹 무리를 상대하며 스윙이 겹치는 자리에서 실수로 동료를
+/// 치는 일이 없어야, 붙어서 사냥하라고 만든 경험치 분배가 성립한다.
+///
+/// 자기 자신은 같은 파티로 치지 않는다. "자기 자신은 칠 수 없다" 는 별개의
+/// 규칙이고, 그쪽이 먼저 걸러야 오류 메시지가 사실대로 나간다.
+pub fn same_party(ctx: &ReducerContext, a: u64, b: u64) -> bool {
+    let seat_a = ctx.db.party_member().character_id().find(a);
+    let seat_b = ctx.db.party_member().character_id().find(b);
+    same_party_seats(
+        a,
+        b,
+        seat_a.map(|seat| seat.party_id),
+        seat_b.map(|seat| seat.party_id),
+    )
+}
+
+/// [`same_party`] 의 판단만 떼어 낸 것. 자리를 파티 번호로 받는다.
+///
+/// 데이터베이스 없이 검사하기 위해 나눴다([`pick_next_leader`] 와 같은 방식).
+/// 여기서 틀리면 파티원을 칠 수 있게 되거나, 반대로 남을 못 치게 된다.
+fn same_party_seats(a: u64, b: u64, party_a: Option<u64>, party_b: Option<u64>) -> bool {
+    if a == b {
+        return false;
+    }
+    match (party_a, party_b) {
+        (Some(pa), Some(pb)) => pa == pb,
+        // 한쪽이라도 파티에 속하지 않았으면 서로 남이다.
+        _ => false,
+    }
+}
+
 /// 두 점 사이 거리의 제곱. 제곱근을 피해 비교만 한다.
 fn dist_sq(ax: f32, ay: f32, bx: f32, by: f32) -> f32 {
     let dx = ax - bx;
@@ -1464,6 +1498,33 @@ mod tests {
     #[test]
     fn 초대는_이십초만_살아_있다() {
         assert_eq!(INVITE_TTL_MICROS, 20_000_000);
+    }
+
+    // ── 파티원끼리는 칠 수 없다 ─────────────────────────────────────────
+
+    #[test]
+    fn 같은_파티면_칠_수_없다() {
+        assert!(same_party_seats(1, 2, Some(7), Some(7)));
+    }
+
+    #[test]
+    fn 다른_파티면_칠_수_있다() {
+        // PK 를 막는 것이 아니라 함께 다니기로 한 사이만 막는다.
+        assert!(!same_party_seats(1, 2, Some(7), Some(8)));
+    }
+
+    #[test]
+    fn 한쪽이라도_파티가_없으면_서로_남이다() {
+        assert!(!same_party_seats(1, 2, Some(7), None));
+        assert!(!same_party_seats(1, 2, None, Some(7)));
+        assert!(!same_party_seats(1, 2, None, None));
+    }
+
+    #[test]
+    fn 자기_자신은_같은_파티로_치지_않는다() {
+        // "자기 자신은 칠 수 없다" 는 별개의 규칙이고 그쪽이 먼저 걸러야 한다.
+        // 여기서 참을 내면 파티에 든 순간 오류 메시지가 사실과 달라진다.
+        assert!(!same_party_seats(1, 1, Some(7), Some(7)));
     }
 
     // ── 경험치 분배 ─────────────────────────────────────────────────────

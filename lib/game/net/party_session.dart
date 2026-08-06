@@ -121,6 +121,23 @@ abstract class PartySession {
   /// 이 값이 참일 때 화면에 "추종" 버튼을 보여 준다.
   bool get canJoinHuntLead => hasHuntLead && !isHuntLeading && !isFollowing;
 
+  /// [characterId] 가 나와 같은 파티인가. **때려도 되는 상대인지의 판정이다.**
+  ///
+  /// 나 자신은 포함하지 않는다 — 자기 자신을 칠 수 없다는 것은 별개의 규칙이고,
+  /// 여기서 함께 참으로 만들면 "파티에 들었더니 내가 나를 못 친다" 라는 엉뚱한
+  /// 이유가 된다.
+  ///
+  /// 화면이 이것을 보는 이유는 서버가 어차피 거절하기 때문이 아니라, **거절될
+  /// 공격을 아예 시도하지 않기 위해서**다. 시도하면 내 화면에서만 타격 표시가
+  /// 나고 상대는 멀쩡한, 같은 싸움을 둘이 다르게 보는 상태가 된다.
+  bool isPartyMate(int characterId) {
+    if (characterId == selfCharacterId) return false;
+    for (final member in members) {
+      if (member.characterId == characterId) return true;
+    }
+    return false;
+  }
+
   /// 내가 따라다니기로 한 상태인가.
   bool get isFollowing {
     final self = selfCharacterId;

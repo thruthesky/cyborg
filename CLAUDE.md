@@ -46,9 +46,12 @@ You, as AI, must follow the instructions below.
 - Monsters are still shared world objects. A monster one player kills is dead
   for everyone, and the kill belongs to a single player.
 - Other players' presence, movement and combat must be visible to each other in real time.
-- PK is allowed. A PC can attack another PC. Party membership grants no protection —
-  it shares position and a follow anchor, nothing else. Contesting a tagged monster
-  still means fighting its owner.
+- PK is allowed. A PC can attack another PC. **Party members are the one exception:
+  they cannot attack each other.** Joining a party is the promise not to. This is
+  not a PK-free zone — you still fight anyone outside your party, and contesting
+  a tagged monster still means fighting its owner. The exception exists because
+  shared experience rewards standing close together, and a swing that reaches the
+  same monsters reaches the ally beside it.
 
 
 ## Tech Stack

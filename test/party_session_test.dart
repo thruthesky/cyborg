@@ -162,6 +162,35 @@ void main() {
     });
   });
 
+  group('파티 — 때려도 되는 상대인가', () {
+    _FakeParty threeSome() => _FakeParty(
+          selfId: 5,
+          leaderId: 9,
+          memberList: [_member(9, leader: true), _member(5), _member(7)],
+        );
+
+    test('같은 파티원은 때릴 수 없다', () {
+      expect(threeSome().isPartyMate(9), isTrue);
+      expect(threeSome().isPartyMate(7), isTrue);
+    });
+
+    test('파티 밖의 사람은 그대로 때릴 수 있다', () {
+      // PK 를 막는 것이 아니라 함께 다니기로 한 사이만 막는다.
+      expect(threeSome().isPartyMate(42), isFalse);
+    });
+
+    test('나 자신은 파티원으로 치지 않는다', () {
+      // 자기 자신을 칠 수 없다는 것은 별개의 규칙이다. 여기서 함께 참으로
+      // 만들면 "파티에 들었더니 내가 나를 못 친다" 라는 엉뚱한 이유가 된다.
+      expect(threeSome().isPartyMate(5), isFalse);
+    });
+
+    test('파티가 없으면 아무도 파티원이 아니다', () {
+      const party = OfflinePartySession();
+      expect(party.isPartyMate(9), isFalse);
+    });
+  });
+
   group('파티 — 정원', () {
     test('서버와 같은 열두 명이다', () {
       // 이 값이 서버 `MAX_PARTY_SIZE` 와 어긋나면 화면과 서버가 다른 답을 낸다.

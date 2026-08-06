@@ -1634,16 +1634,22 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
         ..._destructibles.where((block) => block.isAlive),
       ];
 
-  /// 근접 사거리와 부채꼴 안에 있는, 가장 가까운 다른 요원의 캐릭터 번호.
+  /// 근접 사거리와 부채꼴 안에 있는, 가장 가까운 **때려도 되는** 요원의 번호.
   ///
   /// 없으면 `null`. 여럿이면 하나만 고른다 — 서버 쿨다운이 어차피 한 번만
   /// 받아들이므로, 여러 요청을 보내면 누가 맞을지가 도착 순서에 좌우된다.
+  ///
+  /// **파티원은 후보에서 빠진다.** 서버도 거절하지만([`attack_player`]) 여기서
+  /// 먼저 걸러야 하는 이유는, 같은 몹 무리를 상대하는 동안 동료가 늘 스윙 안에
+  /// 들어오기 때문이다. 보내 놓고 거절당하는 것으로 두면 붙어 싸울 때마다 헛
+  /// 요청이 오가고, 그 사이 뒤에 선 **적**이 후보에서 밀린다.
   int? remoteTargetInArc(Vector2 origin, Vector2 direction, double range) {
     int? best;
     var bestDistance = double.infinity;
     for (final entry in _remotePlayers.entries) {
       final other = entry.value;
       if (!other.alive) continue;
+      if (party.isPartyMate(entry.key)) continue;
       final toTarget = other.grid - origin;
       final distance = toTarget.length;
       if (distance > range + other.bodyRadius) continue;
