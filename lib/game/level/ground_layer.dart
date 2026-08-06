@@ -373,6 +373,11 @@ class GroundLayer extends PositionComponent
         final type = map.tileAt(tx, ty);
         if (type == TileType.none) continue;
 
+        // 안전지대는 모두가 접속하고 모이는 광장이다. 바닥 장식이 깔리면
+        // 겹쳐 선 사람들의 발밑이 지저분해진다. 수직 기물과 같은 기준으로
+        // 비워 둔다.
+        if (map.isInSafeZone(gx, gy, margin: 4)) continue;
+
         final prop = _groundPropFor(type, r);
         if (prop == null) continue;
 
@@ -427,7 +432,7 @@ class GroundLayer extends PositionComponent
           // 통행 판정은 어차피 LevelMap 만 본다.
           return WaterProp(
             seed: r.intRange(0, 1 << 30),
-            radius: r.range(80, 150),
+            radius: r.range(52, 88),
             shallow: true,
             reeds: false,
             color: GamePalette.horizonGlow.withValues(alpha: 0.34),

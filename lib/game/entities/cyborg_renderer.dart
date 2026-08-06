@@ -1,7 +1,8 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
-import 'package:provis/provis.dart' show Finish, Surface, paintSurface;
+import 'package:provis/provis.dart'
+    show Finish, Ramp, Surface, occlude, paintSurface, panelLine, rimBand;
 
 import '../palette.dart';
 import '../visual/provis_bridge.dart';
@@ -53,6 +54,89 @@ abstract final class CyborgRenderer {
   /// provis 의 `detailFor` 도 70px 이하에는 0.25 를 준다 — 그 크기에서 금속
   /// 스크래치를 전부 그리면 입체감이 아니라 얼룩으로 보이고, 값은 값대로 든다.
   static const double _defaultDetail = 0.55;
+
+  // ── 마무리 도구 ──────────────────────────────────────────────────────
+  //
+  // 시각 논제: **인간의 몸에 이식된 군용 프레임 — 판금이 갈라진 틈으로 발광
+  // 회로가 흐른다.** 매끈한 덩어리에는 크기를 읽을 단위가 없어서, 아무리 잘
+  // 칠해도 장난감으로 보인다. 판을 선으로 가르면 그 선이 단위가 되고, 갈라진
+  // 틈에서 빛이 새어 나오면 그 몸이 기계라는 사실이 한눈에 읽힌다.
+
+  /// 판을 가르는 이음선.
+  ///
+  /// 위쪽에 어두운 홈, 그 옆에 밝은 모서리가 함께 그려져 **파낸 자국**이 된다.
+  /// 선 하나를 그냥 긋는 것과는 다르다.
+  static void _seam(
+    Canvas canvas,
+    Path line,
+    Color base, {
+    double width = 1.8,
+    double alpha = 1.0,
+  }) {
+    panelLine(
+      canvas,
+      line,
+      Ramp.of(base, contrast: 1.15),
+      ProvisBridge.light,
+      width: width,
+      alpha: alpha * _detail.clamp(0.35, 1.0),
+    );
+  }
+
+  /// 판 틈으로 새어 나오는 회로 발광.
+  ///
+  /// 몸이 짙어서 실루엣은 살지만 그만큼 심심하다. 이 선들이 시선을 끌고
+  /// 진영색(청록)을 몸 전체에 흩어 놓는다.
+  static void _circuit(
+    Canvas canvas,
+    Path line,
+    Color accent, {
+    double width = 1.4,
+    double alpha = 1.0,
+  }) {
+    canvas.drawPath(
+      line,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = width * 2.2
+        ..strokeCap = StrokeCap.round
+        ..color = accent.withValues(alpha: 0.30 * alpha)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2.5),
+    );
+    canvas.drawPath(
+      line,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = width
+        ..strokeCap = StrokeCap.round
+        ..color = accent.withValues(alpha: 0.92 * alpha),
+    );
+  }
+
+  /// 관절 발광 링. 판과 판이 만나는 곳에 동력이 지난다.
+  static void _joint(
+    Canvas canvas,
+    Offset at,
+    double r,
+    Color accent,
+    double pulse,
+  ) {
+    canvas.drawCircle(
+      at,
+      r * 1.5,
+      Paint()
+        ..color = accent.withValues(alpha: 0.15 * pulse)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2),
+    );
+    canvas.drawCircle(
+      at,
+      r,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.9
+        ..color = accent.withValues(alpha: 0.7 * pulse),
+    );
+  }
 
   /// 지금 그리고 있는 몸의 디테일 수준(0~1).
   ///
@@ -109,7 +193,7 @@ abstract final class CyborgRenderer {
 
     _drawLegs(canvas, design, y, view, swing, armor, dark, armorLight, pulse);
     _drawPelvis(canvas, design, y, view, armor);
-    _drawTorso(canvas, design, y, view, armor, armorLight);
+    _drawTorso(canvas, design, y, view, armor, armorLight, pulse);
     _drawTorsoDetails(canvas, design, y, view, accent, armorLight, pulse);
     _drawShoulders(canvas, design, y, view, armorLight, accent);
 
@@ -276,6 +360,19 @@ abstract final class CyborgRenderer {
           detail: _detail,
           rim: false,
         );
+        // 무릎 관절의 동력 링. 걸을 때 이 점이 함께 움직여 다리가 기계라는
+        // 사실이 매 걸음 확인된다.
+        _joint(canvas, Offset(kneeX, kneeY), t * 0.20, design.accent, pulse);
+        // 정강이 바깥을 타고 내려가는 회로.
+        _circuit(
+          canvas,
+          Path()
+            ..moveTo(kneeX + kneeHalf * 0.45, kneeY + (footY - kneeY) * 0.18)
+            ..lineTo(footX + ankleHalf * 0.35, footY - 2),
+          design.accent,
+          width: 1.1,
+          alpha: 0.55 * pulse,
+        );
       }
 
       // 부츠
@@ -343,6 +440,7 @@ abstract final class CyborgRenderer {
     _View view,
     Paint armor,
     Paint armorLight,
+    double pulse,
   ) {
     final chest = view.halfWidth(design.chestWidth);
     final waist = view.halfWidth(design.waistWidth);
@@ -421,6 +519,63 @@ abstract final class CyborgRenderer {
       canvas.drawPath(plate, armorLight);
       canvas.restore();
     }
+
+    // ── 판 분할 ──────────────────────────────────────────────────────
+    //
+    // 여기가 이 몸에서 가장 넓은 면이다. 단색 덩어리로 두면 관객이 크기를
+    // 가늠할 단위가 없어 장난감처럼 보인다. 흉곽·복부·허리로 가르면 그
+    // 마디가 곧 자[尺]가 된다.
+    canvas.save();
+    canvas.clipPath(path);
+
+    final ribLine = y.chestTop + (y.chest - y.chestTop) * 0.86;
+    final abdomen = y.chest + (y.waist - y.chest) * 0.52;
+
+    // 가로 이음선 둘 — 흉갑과 복부 장갑의 경계.
+    for (final (lineY, span) in [(ribLine, 0.92), (abdomen, 0.78)]) {
+      _seam(
+        canvas,
+        Path()
+          ..moveTo(-chest * span, lineY)
+          ..lineTo(chest * span, lineY),
+        design.armorBase,
+      );
+    }
+
+    // 세로 중심선 — 몸통이 좌우 두 짝으로 여닫힌다는 신호.
+    //
+    // 화면 x 를 투영으로 구한다. 0 으로 고정하면 옆을 볼 때 중심선이 몸
+    // 한가운데에 그대로 남아, 원통이 돌지 않고 무늬만 붙어 있는 것으로 보인다.
+    final front = view.project(0, design.chestWidth * 0.5, view.bodyDepth(design));
+    if (front.depth > 0) {
+      _seam(
+        canvas,
+        Path()
+          ..moveTo(front.x, y.chestTop + 2)
+          ..lineTo(front.x, abdomen),
+        design.armorBase,
+        width: 1.4,
+        alpha: 0.8 * front.depth,
+      );
+    }
+
+    // ── 회로 ─────────────────────────────────────────────────────────
+    //
+    // 갈라진 틈으로 동력이 지난다. 진영색을 몸 전체에 흩어 놓아, 멀리서도
+    // 이 실루엣이 아군이라는 것이 색으로 먼저 읽히게 한다.
+    final circuit = view.project(-0.9, design.chestWidth * 0.5, view.bodyDepth(design));
+    if (circuit.depth > 0) {
+      _circuit(
+        canvas,
+        Path()
+          ..moveTo(circuit.x, ribLine + 1)
+          ..lineTo(circuit.x, abdomen - 1)
+          ..lineTo(circuit.x + chest * 0.24, abdomen + (y.waist - abdomen) * 0.6),
+        design.accent,
+        alpha: 0.6 * pulse * circuit.depth,
+      );
+    }
+    canvas.restore();
 
     // 림 라이트: 실루엣 가장자리를 따라 흐르는 얇은 발광 윤곽.
     // 밝은 데이터 공간 위에서 짙은 몸이 배경에 묻히지 않게 잡아 준다.
@@ -639,6 +794,20 @@ abstract final class CyborgRenderer {
         occlusion: s.depth <= 0 ? 0.30 : 0.0,
       );
 
+      // 어깨는 실루엣의 가장 바깥 모서리다. 이음선 한 줄이 판의 두께를
+      // 만들고, 관절 링이 그 아래에 동력이 지난다는 사실을 알린다.
+      if (s.depth > 0) {
+        _seam(
+          canvas,
+          Path()
+            ..moveTo(s.x - pad * 0.34, y.shoulder - pad * 0.14)
+            ..lineTo(s.x + pad * 0.34, y.shoulder - pad * 0.10),
+          design.armorLight,
+          width: 1.5,
+          alpha: 0.9,
+        );
+      }
+
       // 강습 프레임은 **한쪽 어깨에만** 증설 장갑을 단다. 좌우 대칭 실루엣은
       // 축소하면 정보량이 절반이라, 비대칭 덩어리 하나가 남녀 구분을 만든다.
       if (design.frame == CyborgFrame.assault && s.phase < 0) {
@@ -776,7 +945,20 @@ abstract final class CyborgRenderer {
           rim: false,
           occlusion: occ,
         );
+        // 팔과 몸통이 같은 판금이라 앞쪽 팔이 몸통에 묻혀 사라진다. 안쪽
+        // 가장자리를 한 겹 어둡게 해야 팔이 몸 **앞에** 있다는 것이 읽힌다.
+        if (arm.depth > 0) {
+          occlude(canvas, part, ProvisBridge.light.dir, depth: 0.30, alpha: 0.38);
+        }
       }
+      // 팔꿈치 동력 링.
+      _joint(
+        canvas,
+        Offset(elbowX, elbowY),
+        elbowHalf * 0.32,
+        design.accent,
+        0.55,
+      );
       // 손목 마디. 팔 끝을 끊어 축소해도 관절이 남게 한다.
       canvas.drawRRect(
         RRect.fromRectAndRadius(
@@ -918,6 +1100,27 @@ abstract final class CyborgRenderer {
       detail: _detail,
       // 윤곽 발광은 바로 아래에서 직접 두른다.
       rim: false,
+    );
+    // 시선이 가장 오래 머무는 곳에 역광 띠를 둔다. 밝은 배경에서 머리가
+    // 배경과 붙어 버리는 것을 막는 마지막 한 겹이다.
+    rimBand(
+      canvas,
+      helmetPath,
+      ProvisBridge.light,
+      width: 2.4,
+      color: design.accentSoft,
+      alpha: 0.55,
+      blur: 1.8,
+    );
+    // 정수리에서 뒤통수로 넘어가는 이음선 — 헬멧이 두 짝이라는 신호.
+    _seam(
+      canvas,
+      Path()
+        ..moveTo(shellCx - half * 0.16, top + hh * 0.06)
+        ..lineTo(shellCx + half * 0.30, cy - hh * 0.30),
+      design.armorLight,
+      width: 1.3,
+      alpha: 0.75,
     );
     // 헬멧 윤곽의 림 라이트.
     canvas.drawPath(
