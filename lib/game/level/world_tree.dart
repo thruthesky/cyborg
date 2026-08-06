@@ -1,307 +1,328 @@
 import 'dart:math' as math;
-import 'dart:ui' as ui;
 
+import 'package:flame/components.dart';
 import 'package:flutter/material.dart';
 
 import '../entities/iso_entity.dart';
-import '../iso.dart';
 import '../palette.dart';
 
-/// 월드 정중앙, 안전지대 한복판에 선 나무.
+/// 월드 정중앙 안전지대에 서 있는 큰 나무.
 ///
-/// 1 km² 짜리 데이터 공간은 어디를 봐도 비슷하게 생겨서, 눈으로 잡을 수 있는
-/// 기준점이 없으면 방향 감각이 무너진다. 이 나무는 그 기준점이다 — 멀리서도
-/// 보이도록 크게 세우고, 적의 마젠타와 정반대편인 안전지대의 민트-그린으로
-/// 빛나게 해서 "저기가 안전지대"라는 신호를 겸한다.
+/// 이미지를 쓰지 않고 매 프레임 [Canvas]로 그린다. 그래서 크기·가지 배치·
+/// 흔들림이 전부 수치로 정해지고, 값 하나만 바꿔도 다른 나무가 된다.
 ///
-/// 순수한 이정표라 판정이 없다. 통과해 지나갈 수 있고 피해도 입지 않는다.
+/// 무대가 전산망 내부이므로 자연 그대로의 나무가 아니라 **데이터가 자라
+/// 굳은 나무**로 그린다 — 줄기는 배경에서 떨어지도록 짙게, 잎은 안전지대와
+/// 같은 민트-그린 발광으로 둔다. 열매 자리에는 데이터 노드가 맺힌다.
+///
+/// 지면에 뿌리내린 장식이라 충돌 판정은 갖지 않는다. 통행을 막으려면
+/// [LevelMap]의 타일을 바꿔야 하는데, 그러면 안전지대 한복판의 스폰·귀환
+/// 로직까지 함께 손봐야 한다.
 class WorldTree extends IsoEntity {
-  WorldTree({required super.grid}) : super(bodyRadius: 0.9, depthBias: 0);
+  WorldTree({required Vector2 grid, this.treeHeight = 236})
+      : super(grid: grid, bodyRadius: 0.9);
 
-  /// 줄기 높이(타일 z 단위). 화면에서는 이 값 × [kHeightUnit] 픽셀이 된다.
-  static const double _trunkHeight = 5.0;
+  /// 밑동에서 우듬지까지의 높이(화면 픽셀).
+  ///
+  /// 사이보그의 키가 102~108이므로 기본값은 사람 두 배가 조금 넘는다.
+  final double treeHeight;
 
-  /// 잎이 뭉친 수관(樹冠)의 반지름(픽셀).
-  static const double _canopyRadius = 104.0;
-
-  /// 줄기 밑동의 절반 폭(픽셀).
-  static const double _rootHalfWidth = 26.0;
-
-  /// 줄기 꼭대기의 절반 폭(픽셀). 위로 갈수록 가늘어진다.
-  static const double _topHalfWidth = 9.0;
-
-  /// 수관 중심의 화면 y(위쪽이 음수).
-  static const double _canopyY = -_trunkHeight * kHeightUnit;
-
-  /// 수관 아래쪽 끝의 화면 y. [_canopyBlobs] 중 가장 낮게 내려오는 덩어리의
-  /// 바닥이며, 가지를 어디서 갈라야 잎에 묻히지 않는지를 정한다.
-  static const double _canopyBottomY = _canopyY + _canopyRadius * 1.06;
-
-  /// 수관 주위를 도는 데이터 입자의 수.
-  static const int _moteCount = 14;
-
-  /// 매 프레임 다시 그릴 필요가 없는 줄기·수관을 담아 두는 캐시.
-  ui.Picture? _cached;
+  /// 바람 위상. 가지마다 어긋나게 흔들려야 통짜로 움직이지 않는다.
   double _time = 0;
 
-  /// 입자마다 고정된 궤도 값(시작 위상, 각속도, 궤도 반지름, 높이).
-  ///
-  /// 실행할 때마다 배치가 달라지면 이정표로서의 인상이 흔들리므로 고정 씨앗을
-  /// 쓴다. 여러 클라이언트에서도 같은 모습으로 보인다.
-  static final List<_Mote> _motes = _buildMotes();
+  /// 잎 덩어리와 가지는 한 번 정하면 변하지 않는다. 매 프레임 난수를 뽑으면
+  /// 나무가 부글거린다.
+  late final List<_Branch> _branches = _buildBranches();
+  late final List<_Leaf> _leaves = _buildLeaves();
+  late final List<_Node> _nodes = _buildNodes();
 
-  static List<_Mote> _buildMotes() {
-    final rng = math.Random(20260805);
-    return List.generate(_moteCount, (i) {
-      return _Mote(
-        phase: rng.nextDouble() * math.pi * 2,
-        speed: 0.35 + rng.nextDouble() * 0.5,
-        orbit: _canopyRadius * (0.75 + rng.nextDouble() * 0.55),
-        height: _canopyY + (rng.nextDouble() - 0.5) * _canopyRadius * 1.3,
-        radius: 1.6 + rng.nextDouble() * 2.2,
-      );
-    });
-  }
-
-  @override
-  Future<void> onLoad() async {
-    _cached = _record();
-  }
-
-  @override
-  void onRemove() {
-    _cached?.dispose();
-    _cached = null;
-    super.onRemove();
-  }
+  static final math.Random _rng = math.Random(20260804);
 
   @override
   void update(double dt) {
+    advance(dt);
     super.update(dt);
-    _time += dt;
   }
 
-  /// 밑동에서 꼭대기까지 이어지는 줄기의 윤곽.
-  Path _trunkPath() {
-    const top = _canopyY + kHeightUnit * 0.6;
-    return Path()
-      ..moveTo(-_rootHalfWidth, 0)
-      ..quadraticBezierTo(-_topHalfWidth * 1.6, top * 0.45, -_topHalfWidth, top)
-      ..lineTo(_topHalfWidth, top)
-      ..quadraticBezierTo(_topHalfWidth * 1.6, top * 0.45, _rootHalfWidth, 0)
-      ..close();
-  }
-
-  /// 수관을 이루는 잎 덩어리들. (중심 x, 중심 y, 반지름).
-  static const List<(double, double, double)> _canopyBlobs = [
-    (0, _canopyY - _canopyRadius * 0.34, _canopyRadius * 0.82),
-    (-_canopyRadius * 0.62, _canopyY, _canopyRadius * 0.66),
-    (_canopyRadius * 0.62, _canopyY + _canopyRadius * 0.06, _canopyRadius * 0.7),
-    (-_canopyRadius * 0.24, _canopyY + _canopyRadius * 0.46, _canopyRadius * 0.6),
-    (_canopyRadius * 0.3, _canopyY + _canopyRadius * 0.5, _canopyRadius * 0.54),
-  ];
-
-  ui.Picture _record() {
-    final recorder = ui.PictureRecorder();
-    final canvas = Canvas(recorder);
-
-    _renderRoots(canvas);
-    _renderTrunk(canvas);
-    _renderCanopy(canvas);
-
-    return recorder.endRecording();
-  }
-
-  /// 밑동에서 바닥으로 퍼져 나가는 뿌리. 지면의 데이터 회로와 이어진 모습이다.
-  void _renderRoots(Canvas canvas) {
-    final root = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeWidth = 5
-      ..color = GamePalette.safeZoneEdge.withValues(alpha: 0.55);
-
-    // 아이소메트릭 지면이라 가로로 넓고 세로로 눌린 방향으로 뻗는다.
-    const spread = [
-      Offset(-kHalfTileWidth * 0.8, kHalfTileHeight * 0.42),
-      Offset(kHalfTileWidth * 0.8, kHalfTileHeight * 0.42),
-      Offset(-kHalfTileWidth * 0.55, -kHalfTileHeight * 0.34),
-      Offset(kHalfTileWidth * 0.55, -kHalfTileHeight * 0.34),
-    ];
-    for (final end in spread) {
-      canvas.drawPath(
-        Path()
-          ..moveTo(0, -4)
-          ..quadraticBezierTo(end.dx * 0.5, end.dy * 0.2, end.dx, end.dy),
-        root,
-      );
-    }
-  }
-
-  void _renderTrunk(Canvas canvas) {
-    final trunk = _trunkPath();
-    final bounds = trunk.getBounds();
-
-    // 밝은 배경 위에서 실루엣이 죽지 않도록 줄기는 짙게 유지한다.
-    canvas.drawPath(
-      trunk,
-      Paint()
-        ..shader = ui.Gradient.linear(
-          Offset(bounds.left, 0),
-          Offset(bounds.right, 0),
-          const [
-            Color(0xFF12303F),
-            Color(0xFF1E5468),
-            Color(0xFF0E2733),
-          ],
-          const [0.0, 0.42, 1.0],
-        ),
-    );
-
-    // 줄기를 타고 오르는 수액 — 이 세계에서는 흐르는 데이터다.
-    final vein = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 2
-      ..strokeCap = StrokeCap.round
-      ..color = GamePalette.safeZoneGlow.withValues(alpha: 0.75);
-    canvas.drawPath(
-      Path()
-        ..moveTo(-6, -8)
-        ..quadraticBezierTo(4, _canopyY * 0.45, -2, _canopyY * 0.9),
-      vein,
-    );
-    canvas.drawPath(
-      Path()
-        ..moveTo(7, -6)
-        ..quadraticBezierTo(-2, _canopyY * 0.5, 5, _canopyY * 0.85),
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2
-        ..strokeCap = StrokeCap.round
-        ..color = GamePalette.safeZoneFill.withValues(alpha: 0.5),
-    );
-
-    // 수관으로 갈라져 들어가는 가지.
-    //
-    // 수관은 이 뒤에 그려서 가지 끝을 덮으므로, 갈라지는 지점은 수관 아래쪽
-    // 끝보다 더 낮아야 한다. 그렇지 않으면 가지가 통째로 잎에 묻힌다.
-    final branch = Paint()
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round
-      ..strokeWidth = 6
-      ..color = const Color(0xFF16404F);
-    const baseY = _canopyBottomY + 66;
-    const tipY = _canopyBottomY - 16;
-    for (final dx in [-1.0, 1.0]) {
-      canvas.drawPath(
-        Path()
-          ..moveTo(0, baseY)
-          ..quadraticBezierTo(
-            dx * _canopyRadius * 0.28,
-            baseY - 30,
-            dx * _canopyRadius * 0.6,
-            tipY,
-          ),
-        branch,
-      );
-    }
-  }
-
-  void _renderCanopy(Canvas canvas) {
-    // 잎 덩어리를 겹쳐 쌓아 부피를 만든다. 아래는 그늘, 위는 빛을 받는다.
-    for (final (cx, cy, r) in _canopyBlobs) {
-      canvas.drawCircle(
-        Offset(cx, cy),
-        r,
-        Paint()
-          ..shader = ui.Gradient.radial(
-            Offset(cx - r * 0.3, cy - r * 0.45),
-            r * 1.25,
-            [
-              GamePalette.safeZoneFill.withValues(alpha: 0.95),
-              GamePalette.safeZoneGlow.withValues(alpha: 0.9),
-              GamePalette.safeZoneEdge.withValues(alpha: 0.85),
-            ],
-            const [0.0, 0.55, 1.0],
-          ),
-      );
-    }
-
-    // 잎 사이로 비치는 밝은 결.
-    final sparkle = Paint()
-      ..color = Colors.white.withValues(alpha: 0.5)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3);
-    final rng = math.Random(7);
-    for (var i = 0; i < 18; i++) {
-      final a = rng.nextDouble() * math.pi * 2;
-      final d = rng.nextDouble() * _canopyRadius * 0.95;
-      canvas.drawCircle(
-        Offset(math.cos(a) * d, _canopyY + math.sin(a) * d * 0.8),
-        1 + rng.nextDouble() * 1.8,
-        sparkle,
-      );
-    }
-  }
+  /// 바람 시각만 [dt]만큼 흘린다.
+  ///
+  /// [update]는 컴포넌트가 마운트돼 있어야 하지만(좌표 갱신이 게임을 참조한다),
+  /// 스냅샷 테스트는 캔버스에 바로 그린다. 흔들리는 순간을 검수하려면
+  /// 시각만 따로 밀 수 있어야 한다.
+  void advance(double dt) => _time += dt;
 
   @override
   void render(Canvas canvas) {
-    renderShadow(canvas, _rootHalfWidth * 1.9, radiusY: _rootHalfWidth * 0.95);
+    // 아이소메트릭 지면에 눕는 그림자. 수관이 넓으니 크게 드리운다.
+    renderShadow(canvas, treeHeight * 0.30, radiusY: treeHeight * 0.13);
 
-    final picture = _cached;
-    if (picture != null) canvas.drawPicture(picture);
+    _drawRoots(canvas);
+    _drawTrunk(canvas);
+    for (final branch in _branches) {
+      _drawBranch(canvas, branch);
+    }
+    for (final leaf in _leaves) {
+      _drawLeaf(canvas, leaf);
+    }
+    for (final node in _nodes) {
+      _drawNode(canvas, node);
+    }
+  }
 
-    // 수관을 감싼 후광의 맥동. 안전지대 경계의 맥동과 같은 호흡으로 뛴다.
-    final pulse = 0.5 + 0.3 * math.sin(_time * 1.8);
-    canvas.drawCircle(
-      const Offset(0, _canopyY),
-      _canopyRadius * 1.12,
-      Paint()
-        ..color = GamePalette.safeZoneGlow.withValues(alpha: pulse * 0.3)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 22),
+  // ── 형태 만들기 ─────────────────────────────────────────────────────
+
+  List<_Branch> _buildBranches() {
+    // 좌우로 번갈아 뻗되 높이와 길이를 조금씩 달리해 대칭을 깬다.
+    //
+    // 길이는 수관 반지름(잎 덩어리 최대 0.30)보다 길게 잡는다. 그보다 짧으면
+    // 가지가 잎 안에 통째로 갇혀, 그리는 비용만 들고 실루엣에는 아무것도
+    // 보태지 못한다.
+    const specs = <(double, double, double)>[
+      // (밑동에서의 높이 비율, 방향(-1 왼쪽/1 오른쪽), 길이 비율)
+      (0.44, -1, 0.40),
+      (0.54, 1, 0.44),
+      (0.66, -1, 0.34),
+      (0.76, 1, 0.28),
+    ];
+    return [
+      for (final (at, dir, len) in specs)
+        _Branch(
+          startY: -treeHeight * at,
+          direction: dir,
+          length: treeHeight * len,
+          rise: treeHeight * (0.10 + _rng.nextDouble() * 0.05),
+          phase: _rng.nextDouble() * math.pi * 2,
+        ),
+    ];
+  }
+
+  List<_Leaf> _buildLeaves() {
+    // 수관을 덩어리 여러 개로 쌓아 실루엣에 굴곡을 만든다. 하나의 큰 원은
+    // 축소했을 때 공처럼 보인다.
+    const specs = <(double, double, double)>[
+      // (중심 x 비율, 중심 y 비율(위가 음수), 반지름 비율)
+      (0.00, 0.86, 0.30),
+      (-0.24, 0.74, 0.25),
+      (0.25, 0.76, 0.24),
+      (-0.14, 0.94, 0.20),
+      (0.16, 0.95, 0.19),
+      (0.00, 0.66, 0.22),
+    ];
+    return [
+      for (final (dx, dy, r) in specs)
+        _Leaf(
+          center: Offset(treeHeight * dx, -treeHeight * dy),
+          radius: treeHeight * r,
+          phase: _rng.nextDouble() * math.pi * 2,
+          // 위쪽 덩어리일수록 바람을 더 받는다.
+          sway: 0.5 + dy * 0.9,
+        ),
+    ];
+  }
+
+  List<_Node> _buildNodes() {
+    // 잎 사이에 맺히는 데이터 열매. 맥동 위상을 흩어 놓아야 함께 깜빡이지 않는다.
+    return [
+      for (var i = 0; i < 7; i++)
+        _Node(
+          center: Offset(
+            treeHeight * (_rng.nextDouble() * 0.52 - 0.26),
+            -treeHeight * (0.66 + _rng.nextDouble() * 0.28),
+          ),
+          radius: 2.0 + _rng.nextDouble() * 1.6,
+          phase: _rng.nextDouble() * math.pi * 2,
+        ),
+    ];
+  }
+
+  // ── 그리기 ──────────────────────────────────────────────────────────
+
+  /// 밑동에서 지면으로 퍼지는 뿌리. 나무가 땅에 얹힌 것처럼 보이지 않게 한다.
+  void _drawRoots(Canvas canvas) {
+    final w = treeHeight * 0.13;
+    final paint = Paint()..color = GamePalette.textPrimary;
+    for (var i = -2; i <= 2; i++) {
+      if (i == 0) continue;
+      final dx = i * w * 0.42;
+      final path = Path()
+        ..moveTo(0, -treeHeight * 0.06)
+        ..quadraticBezierTo(dx * 0.6, -treeHeight * 0.02, dx, 0)
+        ..quadraticBezierTo(dx * 0.5, treeHeight * 0.012, 0, 0)
+        ..close();
+      canvas.drawPath(path, paint);
+    }
+  }
+
+  void _drawTrunk(Canvas canvas) {
+    final bottom = treeHeight * 0.085;
+    final top = treeHeight * 0.030;
+    final trunkTop = -treeHeight * 0.62;
+    // 우듬지 쪽이 바람에 조금 밀린다.
+    final lean = math.sin(_time * 0.8) * treeHeight * 0.010;
+
+    final path = Path()
+      ..moveTo(-bottom, 0)
+      ..quadraticBezierTo(-bottom * 0.72, trunkTop * 0.5, -top + lean, trunkTop)
+      ..lineTo(top + lean, trunkTop)
+      ..quadraticBezierTo(bottom * 0.72, trunkTop * 0.5, bottom, 0)
+      ..close();
+    canvas.drawPath(path, Paint()..color = GamePalette.textPrimary);
+
+    // 빛을 받는 왼쪽 면. 2톤으로 나눠야 원통처럼 읽힌다.
+    final litPath = Path()
+      ..moveTo(-bottom, 0)
+      ..quadraticBezierTo(
+        -bottom * 0.72,
+        trunkTop * 0.5,
+        -top + lean,
+        trunkTop,
+      )
+      ..lineTo(-top * 0.1 + lean, trunkTop)
+      ..quadraticBezierTo(-bottom * 0.2, trunkTop * 0.5, -bottom * 0.28, 0)
+      ..close();
+    canvas.drawPath(
+      litPath,
+      Paint()..color = GamePalette.playerArmorLight.withValues(alpha: 0.55),
     );
 
-    // 나무 주위를 도는 데이터 입자.
-    for (final mote in _motes) {
-      final angle = mote.phase + _time * mote.speed;
-      final bob = math.sin(_time * mote.speed * 1.7 + mote.phase) * 10;
-      // 앞으로 돌아올 때는 커지고, 뒤로 돌아갈 때는 옅어진다.
-      final depth = (math.sin(angle) + 1) / 2;
-      canvas.drawCircle(
-        Offset(
-          math.cos(angle) * mote.orbit,
-          mote.height + math.sin(angle) * mote.orbit * 0.28 + bob,
+    // 줄기를 타고 오르는 수액 회로.
+    final vein = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.6
+      ..strokeCap = StrokeCap.round
+      ..color = GamePalette.safeZoneGlow.withValues(alpha: 0.5);
+    canvas.drawPath(
+      Path()
+        ..moveTo(-bottom * 0.3, -treeHeight * 0.03)
+        ..quadraticBezierTo(
+          bottom * 0.15,
+          trunkTop * 0.45,
+          -top * 0.3 + lean,
+          trunkTop * 0.95,
         ),
-        mote.radius * (0.6 + depth * 0.7),
-        Paint()
-          ..color = GamePalette.dataMote
-              .withValues(alpha: 0.25 + depth * 0.55)
-          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 2),
-      );
-    }
+      vein,
+    );
+  }
+
+  void _drawBranch(Canvas canvas, _Branch branch) {
+    // 가지마다 위상이 달라 통짜로 흔들리지 않는다.
+    final sway = math.sin(_time * 1.1 + branch.phase) * branch.length * 0.045;
+    final endX = branch.direction * branch.length + sway;
+    final endY = branch.startY - branch.rise;
+
+    canvas.drawPath(
+      Path()
+        ..moveTo(0, branch.startY)
+        ..quadraticBezierTo(
+          branch.direction * branch.length * 0.55,
+          branch.startY - branch.rise * 0.35,
+          endX,
+          endY,
+        ),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = treeHeight * 0.020
+        ..strokeCap = StrokeCap.round
+        ..color = GamePalette.textPrimary,
+    );
+  }
+
+  void _drawLeaf(Canvas canvas, _Leaf leaf) {
+    final sway = math.sin(_time * 0.9 + leaf.phase) * 2.4 * leaf.sway;
+    final center = leaf.center.translate(sway, math.sin(_time * 1.3 + leaf.phase) * 1.1);
+
+    // 바깥 후광 → 본체 → 밝은 윗면. 세 겹이라야 발광하는 잎으로 읽힌다.
+    canvas.drawCircle(
+      center,
+      leaf.radius * 1.06,
+      Paint()
+        ..color = GamePalette.safeZoneGlow.withValues(alpha: 0.22)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10),
+    );
+    canvas.drawCircle(
+      center,
+      leaf.radius,
+      Paint()..color = GamePalette.safeZoneEdge,
+    );
+    // 위에서 빛을 받는 면.
+    canvas.drawCircle(
+      center.translate(-leaf.radius * 0.22, -leaf.radius * 0.26),
+      leaf.radius * 0.68,
+      Paint()..color = GamePalette.safeZoneFill.withValues(alpha: 0.85),
+    );
+  }
+
+  void _drawNode(Canvas canvas, _Node node) {
+    final pulse = 0.55 + 0.45 * math.sin(_time * 2.4 + node.phase);
+    final sway = math.sin(_time * 0.9 + node.phase) * 2.0;
+    final center = node.center.translate(sway, 0);
+
+    canvas.drawCircle(
+      center,
+      node.radius * 2.4,
+      Paint()
+        ..color = GamePalette.playerAccent.withValues(alpha: 0.30 * pulse)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 5),
+    );
+    canvas.drawCircle(
+      center,
+      node.radius,
+      Paint()..color = GamePalette.bladeCore.withValues(alpha: 0.65 + 0.35 * pulse),
+    );
   }
 }
 
-/// 나무 주위를 도는 데이터 입자 하나의 고정된 궤도.
-class _Mote {
-  const _Mote({
+/// 줄기에서 뻗어 나온 가지 하나.
+class _Branch {
+  const _Branch({
+    required this.startY,
+    required this.direction,
+    required this.length,
+    required this.rise,
     required this.phase,
-    required this.speed,
-    required this.orbit,
-    required this.height,
-    required this.radius,
   });
 
-  /// 궤도의 시작 위상(라디안).
+  /// 줄기에서 갈라지는 높이(위가 음수).
+  final double startY;
+
+  /// -1이면 왼쪽, 1이면 오른쪽.
+  final double direction;
+
+  final double length;
+
+  /// 끝이 시작보다 얼마나 위로 올라가는지.
+  final double rise;
+
+  /// 바람 위상.
+  final double phase;
+}
+
+/// 수관을 이루는 잎 덩어리 하나.
+class _Leaf {
+  const _Leaf({
+    required this.center,
+    required this.radius,
+    required this.phase,
+    required this.sway,
+  });
+
+  final Offset center;
+  final double radius;
   final double phase;
 
-  /// 각속도(라디안/초).
-  final double speed;
+  /// 바람에 흔들리는 정도. 위쪽 덩어리일수록 크다.
+  final double sway;
+}
 
-  /// 궤도 반지름(픽셀).
-  final double orbit;
+/// 잎 사이에 맺힌 데이터 열매.
+class _Node {
+  const _Node({
+    required this.center,
+    required this.radius,
+    required this.phase,
+  });
 
-  /// 궤도가 놓인 화면 y.
-  final double height;
-
-  /// 입자의 크기(픽셀).
+  final Offset center;
   final double radius;
+  final double phase;
 }

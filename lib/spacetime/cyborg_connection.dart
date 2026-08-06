@@ -29,6 +29,124 @@ const List<String> kCyborgViewSubscriptions = [
   'SELECT * FROM my_account',
   'SELECT * FROM my_session',
   'SELECT * FROM my_characters',
+  // 월드에 선 내 몸. **청크 구독과 별개로** 항상 받아야 한다 — 재구독의 기준이
+  // 되는 좌표를 그 구독 안에서 읽으면, 서버가 나를 옮기는 순간(입장 보정·사망
+  // 재가동·텔레포트) 내 행이 옛 구독 밖으로 나가 새 자리를 알 길이 없어진다.
+  'SELECT * FROM my_world_player',
+];
+
+/// 플레이어 구독용 청크 한 변(타일). 서버 `PLAYER_SUB_CHUNK_TILES` 와 같아야 한다.
+///
+/// 어긋나면 청크 번호가 서로 다른 격자를 가리켜 **아무도 서로를 보지 못한다.**
+///
+/// 3×3 을 구독하므로 AOI 는 96×96 m 다(타일 = 미터). 74(222×222 m)에서 줄인
+/// 값이며, **하한을 정하는 것은 부하가 아니라 보장 반경**이다 — 최대 축소 화면이
+/// 덮는 반경(21~42 타일)보다 작아지면 화면 안의 요원이 조용히 사라진다.
+/// 근거는 서버 쪽 상수 문서에 적어 두었다.
+const int kPlayerSubChunkTiles = 32;
+
+/// 한 줄에 들어가는 플레이어 구독 청크 수. 서버 `PLAYER_SUB_CHUNKS_PER_ROW` 와 같다.
+const int kPlayerSubChunksPerRow = 32; // (1006 / 32) + 1
+
+/// 몬스터·전리품 구독용 청크 한 변(타일). 서버 `CHUNK_TILES` 와 같다.
+///
+/// 플레이어와 격자를 달리 쓰는 이유는 밀도가 여덟 배 다르기 때문이다. 같은 면적에
+/// 사람 50 명이 들어오게 맞추면 몹은 400 기가 들어온다.
+const int kMonsterSubChunkTiles = 32;
+
+/// 한 줄에 들어가는 몬스터 구독 청크 수. 서버 `CHUNKS_PER_ROW` 와 같다.
+const int kMonsterSubChunksPerRow = 32; // (1006 / 32) + 1
+
+/// `(cx, cy)` 를 중심으로 한 3×3 청크 번호. 월드 밖은 버린다.
+/// `(cx, cy)` 를 중심으로 반지름 [ring] 칸의 정사각 청크 번호. 월드 밖은 버린다.
+///
+/// [ring] 이 1 이면 3×3, 2 면 5×5 다. 사람과 몹에 다른 값을 쓴다 — 사람은
+/// 3×3 이면 화면을 충분히 덮지만, 몹은 화면을 빽빽이 채워야 사냥터로 보인다.
+List<int> _neighborChunks(int cx, int cy, int perRow, {int ring = 1}) {
+  final keys = <int>[];
+  for (var dy = -ring; dy <= ring; dy++) {
+    for (var dx = -ring; dx <= ring; dx++) {
+      final nx = cx + dx;
+      final ny = cy + dy;
+      if (nx < 0 || ny < 0 || nx >= perRow || ny >= perRow) continue;
+      keys.add(ny * perRow + nx);
+    }
+  }
+  return keys;
+}
+
+/// 월드에 들어가 있는 동안 거는 구독 — **자기 주변 청크만**.
+///
+/// 월드 전체를 구독하면 접속자가 늘수록 전송량이 제곱으로 커진다. 1,000 명이
+/// 서로를 구독하면 초당 1,000만 행이 오간다(`GAME-SERVER.md` §5). 그래서 자기가
+/// 선 청크와 이웃 여덟 칸만 구독한다.
+///
+/// **등식 나열밖에 쓸 수 없다.** 구독 SQL 에는 `LIMIT` 도 거리 정렬도 산술식도
+/// 없어서(`GAME-SERVER.md` §2.4) `WHERE x BETWEEN ...` 같은 자연스러운 범위
+/// 질의가 불가능하다. 정수 청크 번호를 `OR` 로 늘어놓는 것이 유일한 길이다.
+///
+/// **이것은 면적을 자를 뿐 인원을 자르지 않는다.** 안전지대처럼 사람이 몰리면
+/// 그 수만큼 그대로 온다. "가까운 50 명" 은 `ActionRpgGame` 이 거리순으로 잘라
+/// 만든다.
+List<String> worldSubscriptionsFor(
+  double tileX,
+  double tileY, {
+  int? alwaysWatchCharacterId,
+}) {
+  String query(String table, String column, List<int> keys) =>
+      'SELECT * FROM $table WHERE '
+      '${keys.map((k) => '$column = $k').join(' OR ')}';
+
+  final playerKeys = _neighborChunks(
+    tileX ~/ kPlayerSubChunkTiles,
+    tileY ~/ kPlayerSubChunkTiles,
+    kPlayerSubChunksPerRow,
+  );
+  // 몹과 전리품은 같은 격자를 쓰므로 청크 번호를 한 번만 계산해 함께 쓴다.
+  //
+  // **넓히지 않는다.** 한때 5×5 로 늘려 봤지만 화면 안에 보이는 몹 수는 그대로였다 —
+  // 늘어난 것은 화면 밖 몹과 전송량(2.4 배)뿐이었다. 화면을 빽빽하게 만드는 것은
+  // 구독 범위가 아니라 **스폰 밀도**다(서버 `CLUSTER_MIN`/`CLUSTER_MAX`).
+  final fieldKeys = _neighborChunks(
+    tileX ~/ kMonsterSubChunkTiles,
+    tileY ~/ kMonsterSubChunkTiles,
+    kMonsterSubChunksPerRow,
+  );
+
+  // 따라다니는 상대는 청크 밖으로 나가도 계속 보여야 한다. 안 그러면 그 사람이
+  // 경계를 넘는 순간 목록에서 사라지고, 화면은 그것을 "월드에서 나갔다" 와 구별할
+  // 수 없어 추종이 끊긴다. 청크 번호 나열에 등식 하나를 더 붙이는 것으로 끝난다.
+  var playerQuery = query('world_player', 'sub_chunk', playerKeys);
+  if (alwaysWatchCharacterId != null) {
+    playerQuery = '$playerQuery OR character_id = $alwaysWatchCharacterId';
+  }
+
+  return [
+    playerQuery,
+    // 몬스터도 **서버가 진실**이다. 클라이언트가 따로 만들어 내면 A 가 잡은 몹이
+    // B 화면에 살아 있게 되고, 그러면 같은 대상을 함께 때리는 일이 성립하지 않는다.
+    //
+    // 집 청크(`chunk`)가 아니라 `pos_chunk` 로 고르는 것이 중요하다. 집으로 고르면
+    // 확실히 잡히는 것이 반경 6 타일 안의 몹뿐이라 화면 구석이 빈다.
+    query('monster', 'pos_chunk', fieldKeys),
+    // 무엇이 떨어졌는지도 서버가 정한다. 각자 굴리면 같은 몹을 잡고도 서로 다른
+    // 것을 보게 되어 "네가 먹어라" 가 성립하지 않는다.
+    query('loot', 'chunk', fieldKeys),
+  ];
+}
+
+/// 파티에 관한 구독. 월드에 들어가 있는 동안 함께 건다.
+///
+/// [worldSubscriptionsFor] 가 만드는 목록과 한 배열로 합치지 않는다. 파티 표는 공개 표가 아니라
+/// **자기 파티만 보여 주는 view** 라 성격이 다르고, 무엇보다 두 목록을 한 곳에
+/// 두면 월드와 파티를 각각 손보는 사람이 같은 줄에서 부딪친다.
+///
+/// view 도 구독해야 행이 온다 — 걸지 않으면 서버에 파티가 있어도 화면에는
+/// 아무것도 없는, "파티가 없는 것" 과 구별되지 않는 상태가 된다.
+const List<String> kPartySubscriptions = [
+  'SELECT * FROM my_party',
+  'SELECT * FROM my_party_members',
+  'SELECT * FROM my_party_invites',
 ];
 
 /// 월드에 들어가 있는 동안 거는 구독.

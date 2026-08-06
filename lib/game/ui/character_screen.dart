@@ -387,7 +387,6 @@ class CharacterScreen extends PositionComponent
       rows: [
         ('KILLS', '${game.kills}'),
         ('SCORE', '${game.score}'),
-        ('WAVE', '${game.waveNumber}'),
         ('REBOOTS', '${game.deaths}'),
       ],
     );

@@ -8,6 +8,7 @@ import '../action_rpg_game.dart';
 import '../entities/pickup.dart';
 import '../entities/weapon_art.dart';
 import '../level/level_map.dart';
+import '../level/teleport_destinations.dart';
 import '../palette.dart';
 import '../systems/monster_codex.dart';
 import 'world_map_screen.dart';
@@ -77,7 +78,7 @@ class Hud extends PositionComponent with HasGameReference<ActionRpgGame> {
       letterSpacing: 0.2,
     ),
   );
-  final TextPaint _wave = TextPaint(
+  final TextPaint _headline = TextPaint(
     style: const TextStyle(
       color: GamePalette.hudBorder,
       fontSize: 13,
@@ -113,7 +114,7 @@ class Hud extends PositionComponent with HasGameReference<ActionRpgGame> {
   @override
   void render(Canvas canvas) {
     _renderVitals(canvas);
-    _renderWaveBanner(canvas);
+    _renderWorldBanner(canvas);
     _renderMinimap(canvas);
     _renderDamageVignette(canvas);
     if (game.comboDisplayTimer > 0) _renderComboBadge(canvas);
@@ -392,12 +393,15 @@ class Hud extends PositionComponent with HasGameReference<ActionRpgGame> {
     }
   }
 
-  // ── 상단 중앙: 웨이브 ───────────────────────────────────────────────
+  // ── 상단 중앙: 월드 ─────────────────────────────────────────────────
 
-  void _renderWaveBanner(Canvas canvas) {
+  /// 지금 어디에 있고, 이 월드에 몇 명이 함께 있는지.
+  ///
+  /// 웨이브 번호가 있던 자리다. 판 구분도 초기화도 없는 하나의 월드에는
+  /// "몇 번째" 라고 할 진행도가 없으므로, 그 대신 위치와 동료 수를 알린다.
+  void _renderWorldBanner(Canvas canvas) {
     final centerX = size.x / 2;
-    final remaining = game.enemies.where((e) => e.isAlive).length;
-    final pending = game.pendingSpawnCount;
+    final zone = TeleportDestination.at(game.player.grid, game.map);
 
     final rect = Rect.fromCenter(
       center: Offset(centerX, 32),
@@ -413,26 +417,35 @@ class Hud extends PositionComponent with HasGameReference<ActionRpgGame> {
       Paint()
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.2
-        ..color = (game.currentPlan?.isBossWave ?? false)
-            ? GamePalette.robotEye.withValues(alpha: 0.7)
+        // 안전지대에서만 테두리가 살아난다. 로봇이 들어오지 못하는 곳이라는
+        // 사실은 화면 어디서든 한눈에 보여야 한다.
+        ..color = zone.isSafe
+            ? GamePalette.hudBorder.withValues(alpha: 0.8)
             : GamePalette.hudBorder.withValues(alpha: 0.35),
     );
 
-    final bossWave = game.currentPlan?.isBossWave ?? false;
-    _wave.render(
+    _headline.render(
       canvas,
-      bossWave ? 'BOSS WAVE ${game.waveNumber}' : 'WAVE ${game.waveNumber}',
+      zone.label,
       Vector2(centerX, 20),
       anchor: Anchor.topCenter,
     );
     _label.render(
       canvas,
-      game.isIntermission
-          ? 'NEXT WAVE IN ${game.intermissionRemaining.ceil()}s'
-          : 'HOSTILES  ${remaining + pending}',
+      _presenceText(),
       Vector2(centerX, 40),
       anchor: Anchor.topCenter,
     );
+  }
+
+  /// 아래 줄에 적을 접속 상태 문구.
+  ///
+  /// [WorldPresence.others] 는 나를 뺀 목록이라 하나를 더한다. 서버에 붙지
+  /// 않았으면 "1 명" 이라고 적는 대신 오프라인임을 밝힌다 — 아무도 없는 월드와
+  /// 연결이 끊긴 상태는 전혀 다른 사정인데 숫자로는 구별되지 않는다.
+  String _presenceText() {
+    if (!game.presence.isAvailable) return 'OFFLINE';
+    return 'AGENTS  ${game.presence.others.length + 1}';
   }
 
   // ── 우상단: 미니맵 ──────────────────────────────────────────────────
@@ -553,22 +566,25 @@ class Hud extends PositionComponent with HasGameReference<ActionRpgGame> {
       );
     }
 
-    // 다른 요원. 적과 구분되도록 진영색으로 찍고, 테두리를 둘러 전리품보다
-    // 눈에 먼저 들어오게 한다. 이 게임에서 사람은 사냥 경쟁자이자 PK 상대라
-    // "저기 누가 있다" 가 곧 판단이 필요한 정보다.
-    for (final other in game.remotePlayers) {
+    // 같은 월드의 다른 요원. 내 몸(청록)과 갈리는 호박색으로 찍는다.
+    //
+    // 적(마젠타)보다 조금 크게 그려 "저건 사람이다" 가 먼저 읽히게 한다 —
+    // 몹은 지나치면 그만이지만 사람은 함께 사냥할 수도, PK 로 붙을 수도 있어
+    // 판단이 필요하다.
+    for (final other in game.presence.others) {
+      final at = toRadar(other.grid);
       canvas.drawCircle(
-        toRadar(other.grid),
-        3.2,
-        Paint()..color = GamePalette.playerAccent,
+        at,
+        4.5,
+        Paint()..color = GamePalette.remotePlayer.withValues(alpha: 0.3),
       );
       canvas.drawCircle(
-        toRadar(other.grid),
-        3.2,
+        at,
+        2.6,
         Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1
-          ..color = GamePalette.textPrimary.withValues(alpha: 0.6),
+          ..color = other.alive
+              ? GamePalette.remotePlayer
+              : GamePalette.remotePlayer.withValues(alpha: 0.45),
       );
     }
 

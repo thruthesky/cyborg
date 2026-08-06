@@ -20,12 +20,13 @@
 pub mod auth;
 pub mod character;
 pub mod leaderboard;
+pub mod party;
 pub mod world;
 
 use spacetimedb::{Identity, ReducerContext, Timestamp, ViewContext, view};
 
 // 접속이 끊길 때 월드에서 내보내기 위해 필요하다([`on_disconnect`]).
-use world::world_player;
+use world::{world_player, world_player__view};
 
 // ── 테이블 ──────────────────────────────────────────────────────────────
 
@@ -171,6 +172,21 @@ fn my_characters(ctx: &ViewContext) -> Vec<PlayerCharacter> {
         .collect()
 }
 
+/// 월드에 서 있는 **내 몸**. 월드 밖이면 비어 있다.
+///
+/// 관심 영역 구독은 자기가 선 청크 둘레만 가져오는데, 그 판단의 기준이 되는
+/// 좌표를 다시 그 구독에서 읽으면 닭과 달걀이 된다. **서버가 나를 옮기는 순간**
+/// — 안전지대 밖 입장 좌표 보정, 사망 재가동, 텔레포트 — 내 행은 옛 구독 밖으로
+/// 나가고, 그러면 클라이언트는 새 자리를 알 길이 없어 영영 옛 청크를 구독한 채
+/// 빈 화면을 본다.
+///
+/// 이 view 는 청크와 무관하게 **언제나** 내 행 하나를 준다. 재구독의 기준점이
+/// 여기에서 나오므로 그 고리가 끊긴다.
+#[view(accessor = my_world_player, public)]
+fn my_world_player(ctx: &ViewContext) -> Option<world::WorldPlayer> {
+    ctx.db.world_player().identity().find(ctx.sender())
+}
+
 // ── 내부 헬퍼 ───────────────────────────────────────────────────────────
 
 /// 호출자의 세션을 꺼낸다. 로그인하지 않았으면 에러다.
@@ -193,6 +209,18 @@ pub fn init(ctx: &ReducerContext) {
     log::info!("cyborg 모듈 초기화 완료");
 }
 
+/// 모듈을 다시 배포할 때마다 돈다.
+///
+/// **[`init`] 은 최초 한 번뿐이다.** 주기 상수를 고쳐 배포해도 이미 들어 있는
+/// 스케줄 행은 옛 주기로 계속 돌아, 코드와 실제 동작이 조용히 어긋난다. 실측으로
+/// 겪은 함정이다 — AI 틱을 300ms 에서 150ms 로 바꿔 배포했는데 로그의 간격은
+/// 그대로 300ms 였다.
+#[spacetimedb::reducer(update)]
+pub fn on_update(ctx: &ReducerContext) {
+    world::bootstrap(ctx);
+    log::info!("cyborg 모듈 갱신 완료");
+}
+
 #[spacetimedb::reducer(client_connected)]
 pub fn on_connect(ctx: &ReducerContext) {
     log::debug!("연결: {}", ctx.sender());
@@ -209,6 +237,13 @@ pub fn on_disconnect(ctx: &ReducerContext) {
     // 세션과 달리 월드에서는 즉시 내보낸다. 남겨 두면 조종하는 사람이 없는
     // 캐릭터가 사냥터 한복판에 서 있게 되고, 다른 요원 눈에는 가만히 서서
     // 몹을 선점만 하고 있는 것으로 보인다.
+    //
+    // 파티도 함께 끝낸다. 조종하는 사람이 없는 파티를 남겨 두면 파티장이 앱을
+    // 닫은 순간 남은 사람이 해산도 위임도 못 하는 상태가 된다. 캐릭터를 알아내야
+    // 하므로 월드 행을 지우기 **전에** 읽는다.
+    if let Some(me) = ctx.db.world_player().identity().find(ctx.sender()) {
+        party::on_character_left(ctx, me.character_id);
+    }
     ctx.db.world_player().identity().delete(ctx.sender());
     log::debug!("연결 해제: {}", ctx.sender());
 }

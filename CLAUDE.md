@@ -15,6 +15,11 @@ You, as AI, must follow the instructions below.
 
 - AI Robot conquered the world, Human cyborg fight back to save the world.
 
+## References
+
+- 형제 게임 라리엔: ` ~/apps/game/laryen` 폴더를 보고, 라리엔 게임의 로직/코드를 바탕으로 기능/코드를 복사해와도 됩니다. 단, 절대로 라리엔 게임 소스 코드를 수정해서는 안됩니다. 반드시, ` ~/apps/game/laryen` 폴더는 읽기 전용으로만 참고해야 합니다.
+
+
 
 ## World
 
@@ -25,12 +30,25 @@ You, as AI, must follow the instructions below.
 ## Multiplayer
 
 - Multiple users must be able to join the world and play in it at the same time.
-- Hunting is solo, not party based. There is no party, no shared damage credit
-  and no party loot rule. Each player hunts monsters on their own.
+- A party travels and hunts together, and **shares experience**.
+  Kill credit itself stays solo: the first attacker owns the monster, and the
+  loot and the kill record go to that owner alone. There is no shared damage
+  credit and no party loot rule.
+- Experience from a kill is split among party members who were within 30 tiles
+  of where the monster fell, alive, and in the same party. The total grows with
+  headcount (+10% per extra member, so 2.1x at twelve), is divided evenly, and
+  is then scaled per member by how close their level is to the monster's level
+  (full within 10 levels, then 50% / 25% / nothing). The owner is exempt from
+  that scaling and keeps the division remainder. A party member hunting alone
+  earns exactly what they would solo.
+- Party members may follow their leader. A follower auto-hunts around the leader
+  and shares in every kill the group lands nearby.
 - Monsters are still shared world objects. A monster one player kills is dead
   for everyone, and the kill belongs to a single player.
 - Other players' presence, movement and combat must be visible to each other in real time.
-- PK is allowed. A PC can attack another PC.
+- PK is allowed. A PC can attack another PC. Party membership grants no protection —
+  it shares position and a follow anchor, nothing else. Contesting a tagged monster
+  still means fighting its owner.
 
 
 ## Tech Stack

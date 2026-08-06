@@ -1,231 +1,219 @@
-import 'dart:ui';
+@Tags(['integration'])
+library;
 
-import 'package:flame/components.dart';
-import 'package:flutter_test/flutter_test.dart';
-
-import 'package:actionrpg/game/action_rpg_game.dart';
-import 'package:actionrpg/game/entities/cyborg_design.dart';
-import 'package:actionrpg/game/entities/remote_player.dart';
-import 'package:actionrpg/game/net/world_presence.dart';
-import 'package:actionrpg/spacetime/cyborg_connection.dart';
-
-/// 다른 플레이어가 서로에게 보이는지에 관한 테스트.
+/// 실제 maincloud 에서 **두 접속이 서로를 보는지** 확인한다.
 ///
-/// 이 게임은 하나의 월드를 여럿이 공유하는 MMO 다. 서로가 보이지 않으면
-/// 규격 자체가 성립하지 않으므로, 그 연결의 길목을 여기서 지킨다.
+/// 이 파일이 통과하지 못하면 "여럿이 하나의 월드를 공유한다" 는 전제가 성립하지
+/// 않는다. 표와 reducer 가 다 있어도 클라이언트가 부르지 않으면 아무도 서로를
+/// 볼 수 없고, 그 상태는 화면만 봐서는 "아직 아무도 접속하지 않았다" 와 구별되지
+/// 않는다 — 그래서 사람 눈이 아니라 테스트가 지켜야 한다.
+import 'package:flutter_test/flutter_test.dart';
+import 'package:spacetimedb_sdk/spacetimedb_sdk.dart';
+
+import 'package:actionrpg/spacetime/cyborg_connection.dart';
+import 'package:actionrpg/spacetime/generated/client.dart';
+
 void main() {
-  group('월드 구독', () {
-    test('world_player 를 구독한다', () {
-      // 이 한 줄이 빠져 있어서 서로를 못 봤다. 서버 표가 `public` 이라는 것은
-      // "구독할 수 있다" 는 뜻이지 "보내 준다" 는 뜻이 아니다 — 구독하지 않으면
-      // 남들이 멀쩡히 월드를 돌아다녀도 내 캐시는 영원히 비어 있다.
-      expect(
-        kWorldSubscriptions.any((query) => query.contains('world_player')),
-        isTrue,
-        reason: 'world_player 를 구독하지 않으면 다른 플레이어가 오지 않는다',
-      );
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  String uniqueEmail() =>
+      'world-${DateTime.now().microsecondsSinceEpoch}@cyborg.test';
+
+  /// 안전지대 안의 한 지점. 클라이언트가 지형을 보고 고르는 자리를 흉내낸다.
+  ///
+  /// 월드 중심은 (503, 503) 이고 안전지대는 한 변 50 타일이라, 중심에서 조금
+  /// 벗어난 이 좌표도 안전지대 안이다.
+  ({double x, double y}) spawnPoint(double dx, double dy) =>
+      (x: 503 + dx, y: 503 + dy);
+
+  /// 새 계정으로 접속해 캐릭터까지 만들고 월드에 들어간다.
+  Future<SpacetimeDbClient> joinWorld(
+    String name, {
+    double dx = 0,
+    double dy = 0,
+  }) async {
+    final client = await SpacetimeDbClient.create(
+      host: kCyborgHost,
+      database: kCyborgDatabase,
+      ssl: kCyborgSsl,
+      authStorage: InMemoryTokenStore(),
+    );
+    await client.connect(initialSubscriptions: kCyborgViewSubscriptions);
+
+    await client.reducers.registerAccount(
+      email: uniqueEmail(),
+      password: 'hunter2!!',
+    );
+    await pumpUntil(() => client.myAccount != null);
+
+    await client.reducers.createCharacter(name: name, kind: 'male_cyborg');
+    await pumpUntil(() => client.myCharacters.count() == 1);
+
+    final at = spawnPoint(dx, dy);
+    // 구독은 이제 **자기 주변 청크만** 건다. 입장 좌표를 먼저 정해야 어느 청크를
+    // 구독할지 알 수 있으므로, 좌표 계산이 구독보다 앞선다.
+    await client.subscriptions.subscribe(worldSubscriptionsFor(at.x, at.y));
+    await client.reducers.enterWorld(gridX: at.x, gridY: at.y);
+    return client;
+  }
+
+  test('두 접속이 월드에서 서로를 본다', () async {
+    final alice = await joinWorld('앨리스');
+    final bob = await joinWorld('밥돌이');
+
+    addTearDown(() async {
+      await alice.reducers.leaveWorld();
+      await bob.reducers.leaveWorld();
+      await alice.disconnect();
+      await bob.disconnect();
     });
 
-    test('앱 시작 구독과 겹치지 않는다', () {
-      // 월드 구독은 게임에 들어갈 때 걸고 나올 때 푼다. 시작 구독에 섞어 두면
-      // 캐릭터 선택 화면에 앉아 있는 동안에도 월드 전체를 받아 보게 된다.
-      for (final query in kWorldSubscriptions) {
-        expect(kCyborgViewSubscriptions, isNot(contains(query)));
-      }
-    });
+    // 각자 자기 자신이 월드에 있는 것을 본다.
+    await pumpUntil(() => alice.worldPlayer.iter().any(
+          (p) => p.identity == alice.identity,
+        ));
+    await pumpUntil(() => bob.worldPlayer.iter().any(
+          (p) => p.identity == bob.identity,
+        ));
+
+    // **서로**를 본다. 이것이 이 테스트의 전부다.
+    await pumpUntil(() => alice.worldPlayer.iter().any(
+          (p) => p.identity == bob.identity,
+        ));
+    await pumpUntil(() => bob.worldPlayer.iter().any(
+          (p) => p.identity == alice.identity,
+        ));
+
+    final bobSeenByAlice =
+        alice.worldPlayer.iter().firstWhere((p) => p.identity == bob.identity);
+    expect(bobSeenByAlice.name, '밥돌이');
+    expect(bobSeenByAlice.alive, isTrue);
   });
 
-  group('WorldPresence 기본 구현', () {
-    test('오프라인에서는 월드에 나 혼자다', () async {
-      const presence = OfflineWorldPresence();
+  test('입장하자마자 실제 스폰 자리에 보인다', () async {
+    // 서버가 임의로 월드 중심에 세우면, 실제 몸이 선 자리와 어긋난 채로
+    // 남의 화면에 나타난다. 그 간격은 속도 상한 때문에 몇 초에 걸쳐서야
+    // 좁혀지고, 그동안 "움직여야 비로소 보이는" 증상이 된다.
+    final watcher = await joinWorld('지켜보는자');
+    final newcomer = await joinWorld('막들어온자', dx: -14, dy: -21);
 
-      expect(presence.isAvailable, isFalse);
-      expect(presence.others, isEmpty);
-      // 서버가 없어도 게임은 그대로 돌아야 한다. 어느 것도 던지지 않는다.
-      await presence.enter(Vector2(503, 503));
-      presence.tick(1 / 60, Vector2(503, 503), Vector2(1, 0));
-      await presence.leave();
+    addTearDown(() async {
+      await watcher.reducers.leaveWorld();
+      await newcomer.reducers.leaveWorld();
+      await watcher.disconnect();
+      await newcomer.disconnect();
     });
 
-    test('연동을 넘기지 않은 게임은 오프라인으로 선다', () {
-      final game = ActionRpgGame();
+    await pumpUntil(() => watcher.worldPlayer.iter().any(
+          (p) => p.identity == newcomer.identity,
+        ));
 
-      expect(game.presence, isA<OfflineWorldPresence>());
-      expect(game.remotePlayers, isEmpty);
-    });
+    final seen = watcher.worldPlayer
+        .iter()
+        .firstWhere((p) => p.identity == newcomer.identity);
 
-    test('넘긴 연동을 그대로 쓴다', () {
-      final presence = _FakePresence();
-      final game = ActionRpgGame(presence: presence);
-
-      expect(game.presence, same(presence));
-    });
+    // 보고를 한 번도 하지 않았는데도 실제 스폰 자리에 있어야 한다.
+    expect(
+      seen.gridX,
+      closeTo(503 - 14, 0.01),
+      reason: '입장 좌표가 무시되고 월드 중심에 세워졌다',
+    );
+    expect(seen.gridY, closeTo(503 - 21, 0.01));
   });
 
-  group('RemotePlayer — 서버가 준 상태로 선다', () {
-    test('서버가 준 자리에 선다', () {
-      final remote = RemotePlayer(_state(x: 120, y: 340));
-
-      expect(remote.grid.x, 120);
-      expect(remote.grid.y, 340);
+  test('안전지대 밖 입장 좌표는 중심으로 떨어진다', () async {
+    // 입장이 곧 무제한 텔레포트가 되면 안 된다.
+    final client = await joinWorld('먼곳에서온자', dx: 300, dy: 300);
+    addTearDown(() async {
+      await client.reducers.leaveWorld();
+      await client.disconnect();
     });
 
-    test('서버가 준 종류로 몸을 고른다', () {
-      final female = RemotePlayer(_state(kind: 'female_cyborg'));
-      final male = RemotePlayer(_state(kind: 'male_cyborg'));
+    // **`my_world_player` view 로 확인한다.** 청크 구독은 요청한 좌표 둘레를
+    // 가져오는데 서버는 나를 중심으로 옮겨 세우므로, 그쪽에는 내 행이 없다 —
+    // 바로 그 어긋남 때문에 이 view 가 필요했다.
+    await pumpUntil(() => client.myWorldPlayer != null);
 
-      expect(female.design.frame, CyborgFrame.infiltrator);
-      expect(male.design.frame, CyborgFrame.assault);
-    });
-
-    test('모르는 종류라도 몸 없이 서 있지는 않는다', () {
-      // 서버에 새 외형이 생겼는데 클라이언트가 낡은 경우다. 안 보이는 것보다
-      // 기본 몸으로라도 보이는 편이 낫다.
-      final unknown = RemotePlayer(_state(kind: 'robot_overlord'));
-
-      expect(unknown.design.frame, CyborgFrame.assault);
-    });
-
-    test('같은 사람은 같은 열쇠를 갖는다', () {
-      final remote = RemotePlayer(_state(id: 'abc'));
-      expect(remote.id, 'abc');
-    });
+    final me = client.myWorldPlayer!;
+    expect(me.gridX, closeTo(503, 0.01));
+    expect(me.gridY, closeTo(503, 0.01));
   });
 
-  group('RemotePlayer — 받은 좌표를 향해 걸어간다', () {
-    test('새 좌표를 받아도 한 프레임에 순간이동하지 않는다', () {
-      final remote = RemotePlayer(_state(x: 100, y: 100));
+  test('한쪽이 움직이면 다른 쪽이 그 좌표를 받는다', () async {
+    final alice = await joinWorld('이동자');
+    final bob = await joinWorld('관찰자');
 
-      remote.apply(_state(x: 101, y: 100));
-      remote.update(1 / 60);
-
-      // 좌표는 초당 10 번만 온다. 도착할 때마다 그 자리로 옮기면 초당 10 칸씩
-      // 튀는 텔레포트로 보인다.
-      expect(remote.grid.x, greaterThan(100));
-      expect(remote.grid.x, lessThan(101));
+    addTearDown(() async {
+      await alice.reducers.leaveWorld();
+      await bob.reducers.leaveWorld();
+      await alice.disconnect();
+      await bob.disconnect();
     });
 
-    test('목표에 실제로 도착한다 — 영영 기어가지 않는다', () {
-      final remote = RemotePlayer(_state(x: 100, y: 100));
-      remote.apply(_state(x: 101, y: 100));
+    await pumpUntil(() => bob.worldPlayer.iter().any(
+          (p) => p.identity == alice.identity,
+        ));
 
-      // 남은 거리에 비례해서만 좁히면 그 거리는 영영 0 이 되지 않는다.
-      // 다음 좌표가 오지 않는 동안(= 상대가 멈춘 동안) 반드시 도착해야
-      // 정지 자세로 돌아간다.
-      for (var i = 0; i < 60; i++) {
-        remote.update(1 / 60);
-      }
+    final before = bob.worldPlayer
+        .iter()
+        .firstWhere((p) => p.identity == alice.identity);
 
-      expect(remote.grid.x, closeTo(101, 1e-6));
-      expect(remote.grid.y, closeTo(100, 1e-6));
+    // 안전지대 중심에서 조금 걸어 나간다. 속도 상한(14타일/초)에 걸리지
+    // 않도록 한 걸음만 옮긴다.
+    final target = before.gridX + 3;
+    await alice.reducers.moveTo(
+      gridX: target,
+      gridY: before.gridY,
+      facingX: 1,
+      facingY: 0,
+    );
+
+    await pumpUntil(() {
+      final now = bob.worldPlayer
+          .iter()
+          .firstWhere((p) => p.identity == alice.identity);
+      return (now.gridX - before.gridX).abs() > 0.5;
     });
 
-    test('갱신 주기 안에 대부분을 따라잡는다', () {
-      final remote = RemotePlayer(_state(x: 100, y: 100));
-      remote.apply(_state(x: 101, y: 100));
-
-      // 좌표는 0.1 초마다 온다. 그 안에 절반도 못 좁히면 남이 얼음판 위를
-      // 미끄러지듯 늘 한참 뒤처져 보인다.
-      for (var i = 0; i < 6; i++) {
-        remote.update(1 / 60);
-      }
-
-      expect(remote.grid.x, greaterThan(100.5));
-      expect(remote.grid.x, lessThanOrEqualTo(101));
-    });
-
-    test('멈춘 사람은 제자리에 있는다', () {
-      final remote = RemotePlayer(_state(x: 100, y: 100));
-
-      for (var i = 0; i < 30; i++) {
-        remote.update(1 / 60);
-      }
-
-      expect(remote.grid, Vector2(100, 100));
-    });
-
-    test('텔레포트는 걸어서 가지 않는다', () {
-      final remote = RemotePlayer(_state(x: 100, y: 100));
-
-      // 월드를 가로지르는 이동이다. 보간하면 지형을 뚫고 몇 초 동안 날아간다.
-      remote.apply(_state(x: 900, y: 900));
-      remote.update(1 / 60);
-
-      expect(remote.grid, Vector2(900, 900));
-    });
+    final after = bob.worldPlayer
+        .iter()
+        .firstWhere((p) => p.identity == alice.identity);
+    expect(after.gridX, greaterThan(before.gridX));
   });
 
-  group('RemotePlayer — 상태 갱신', () {
-    test('좌표가 바뀌어도 같은 몸이 이어진다', () {
-      final remote = RemotePlayer(_state(id: 'abc', x: 100, y: 100));
+  test('월드를 나가면 상대 목록에서 사라진다', () async {
+    final alice = await joinWorld('떠나는자');
+    final bob = await joinWorld('남는자');
 
-      remote.apply(_state(id: 'abc', x: 104, y: 100));
-      remote.update(1 / 60);
-
-      // 새 몸을 만들면 보간과 애니메이션 위상이 매 갱신마다 지워져 남들이
-      // 0.1 초마다 제자리에서 깜빡인다.
-      expect(remote.id, 'abc');
-      expect(remote.grid.x, greaterThan(100));
+    addTearDown(() async {
+      await bob.reducers.leaveWorld();
+      await alice.disconnect();
+      await bob.disconnect();
     });
 
-    test('이름과 레벨이 바뀌면 따라간다', () {
-      final remote = RemotePlayer(_state(name: '강철', level: 3));
+    await pumpUntil(() => bob.worldPlayer.iter().any(
+          (p) => p.identity == alice.identity,
+        ));
 
-      remote.apply(_state(name: '강철', level: 4));
+    await alice.reducers.leaveWorld();
 
-      // 레벨업은 이름표에 바로 드러나야 한다. 다시 그리다 예외가 나지 않는지도
-      // 함께 본다 — 이름표는 값이 바뀔 때만 새로 만든다.
-      expect(() => _render(remote), returnsNormally);
-    });
-
-    test('쓰러진 사람은 그리지 않는다', () {
-      final remote = RemotePlayer(_state(alive: false));
-
-      expect(() => _render(remote), returnsNormally);
-    });
-
-    test('살아 있는 사람을 그리는 데 게임 인스턴스가 필요하지 않다', () {
-      // 다른 플레이어는 조종 대상이 아니라 서버가 알려 준 사실이다. 판정에
-      // 끼어들지 않으므로 게임 상태를 읽을 이유도 없다.
-      final remote = RemotePlayer(_state());
-
-      expect(() => _render(remote), returnsNormally);
-    });
+    // 조종하는 사람이 없는 몸이 사냥터에 남아 있으면 안 된다.
+    await pumpUntil(() => !bob.worldPlayer.iter().any(
+          (p) => p.identity == alice.identity,
+        ));
   });
 }
 
-/// 서버가 보낸 한 사람의 상태를 흉내 낸다.
-RemotePlayerState _state({
-  String id = 'remote-1',
-  int characterId = 7,
-  String name = '강철',
-  String kind = 'male_cyborg',
-  int level = 3,
-  double x = 503,
-  double y = 503,
-  bool alive = true,
-}) {
-  return RemotePlayerState(
-    id: id,
-    characterId: characterId,
-    name: name,
-    kind: kind,
-    level: level,
-    gridX: x,
-    gridY: y,
-    alive: alive,
-  );
-}
-
-/// 캔버스에 한 번 그려 본다. 예외 없이 끝나는지만 본다.
-void _render(RemotePlayer remote) {
-  final recorder = PictureRecorder();
-  remote.render(Canvas(recorder));
-  recorder.endRecording().dispose();
-}
-
-/// 무엇도 하지 않지만 [OfflineWorldPresence] 는 아닌 구현.
-class _FakePresence extends WorldPresence {
-  @override
-  bool get isAvailable => true;
+/// [condition] 이 참이 될 때까지 기다린다.
+Future<void> pumpUntil(
+  bool Function() condition, {
+  Duration timeout = const Duration(seconds: 15),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (!condition()) {
+    if (DateTime.now().isAfter(deadline)) {
+      fail('조건이 ${timeout.inSeconds}초 안에 만족되지 않았다');
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+  }
 }

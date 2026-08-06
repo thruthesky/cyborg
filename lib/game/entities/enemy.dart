@@ -75,14 +75,190 @@ class Enemy extends IsoEntity with Damageable {
   /// 웨이브로 투입된 추적대는 상주 개체가 아니므로 null이다.
   MonsterSeed? seed;
 
+  /// 서버가 관리하는 개체라면 그 번호.
+  ///
+  /// 값이 있으면 **이 몹의 진실은 전부 서버에 있다.** 체력도 생사도 위치도
+  /// 서버가 정하고, 이 컴포넌트는 그것을 그리기만 한다. 로컬에서 판정하면
+  /// A 가 잡은 몹이 B 화면에 살아 있게 되어 "하나의 월드" 가 깨진다.
+  int? serverId;
+
+  /// 서버가 모는 개체인지.
+  bool get isServerDriven => serverId != null;
+
+  /// 서버가 모는 개체의 피해는 서버가 판정한다.
+  ///
+  /// 이 값이 참이면 **화면에서 무엇이 닿았든 그것만으로는 아무것도 깎이지 않는다.**
+  /// 발사체처럼 이미 서버 판정이 끝난 뒤에 날아가는 연출이 또 공격을 보내는 것을
+  /// 막는 데 쓴다([`Damageable.isServerJudged`]).
+  @override
+  bool get isServerJudged => isServerDriven;
+
+  /// 서버가 알려 준 체력 비율. 로컬 계산을 쓰지 않는다.
+  double _serverHpRatio = 1;
+
+  /// 서버가 알려 준 생사.
+  bool _serverAlive = true;
+
+  /// 내가 선점한 몹인지. 크레딧이 나에게 오는지 색으로 알린다.
+  bool taggedByMe = false;
+
+  /// 서버가 알려 준 목표 좌표. 여기를 향해 미끄러진다.
+  ///
+  /// 받은 좌표로 곧바로 옮기지 않는 이유가 있다. 서버 AI 는 1/24 초마다(24 Hz)
+  /// 도는데, 그 값을 즉시 반영하면 몹이 초당 스물네 번 계단을 밟듯 튄다. 목표를 향해
+  /// 보간하면 같은 데이터로도 걸어오는 것처럼 보인다 — 화면을 부드럽게 하려는
+  /// 것이지 판정을 흉내 내는 것이 아니다. 사거리·피해는 언제나 서버가 정한다.
+  /// 이번 보간 구간의 시작점. 서버 갱신이 올 때의 **화면 위치**다.
+  ///
+  /// 서버가 준 이전 좌표가 아니라 지금 그려지고 있는 자리에서 출발해야 한다.
+  /// 그러지 않으면 갱신마다 몸이 뒤로 튕겼다 다시 나아간다.
+  Vector2? _segFrom;
+
+  /// 이번 구간의 도착점. 서버가 마지막으로 알려 준 좌표다.
+  Vector2? _segTo;
+
+  /// 이 구간을 지나온 시간(초).
+  double _segElapsed = 0;
+
+  /// 이 구간에 배정한 시간(초). 실측 갱신 간격에서 뽑는다.
+  double _segDuration = _defaultSegment;
+
+  /// 서버 갱신 간격의 이동 평균(초).
+  ///
+  /// 서버 틱을 클라이언트가 상수로 알고 있으면 서버에서 그 값을 바꿀 때마다
+  /// 양쪽을 함께 고쳐야 하고, 한쪽만 고치면 아무도 눈치채지 못한 채 움직임이
+  /// 어색해진다. 실측해서 따라가면 그런 일이 없다.
+  double _tickEstimate = _defaultSegment;
+
+  /// 서버 갱신이 마지막으로 온 시각. 간격을 재는 기준이다.
+  DateTime? _lastServerAt;
+
+  /// 서버가 알려 준 바라보는 방향. 없으면 이동 방향에서 뽑는다.
+  Vector2? _serverFacing;
+
+  /// 마지막으로 **재생한** 타격의 서버 시각(마이크로초).
+  ///
+  /// `-1` 은 "아직 기준이 없다" 는 뜻이다. 첫 스냅샷이 그 값을 채우고, 그 뒤의
+  /// 변화만 재생한다. 0 을 그 자리에 쓰면 **한 번도 때린 적 없는 몹의 첫
+  /// 타격**(서버 기본값 epoch → 실제 시각)까지 함께 버려진다.
+  int _playedAttackAt = -1;
+
+  /// 남은 타격 동작 시간(초). 0 보다 크면 후려치는 중이다.
+  double _serverStrike = 0;
+
+  /// 타격 동작 한 번의 길이(초).
+  ///
+  /// 서버의 몹 공격 쿨다운(1.2초)보다 훨씬 짧게 잡는다. 길면 동작이 이어져
+  /// 몇 대를 맞았는지 눈으로 셀 수 없다.
+  static const double _serverStrikeDuration = 0.28;
+
+  /// 갱신 간격을 아직 모를 때 쓰는 기본값(초). 서버 AI 틱(`MONSTER_AI_MICROS`
+  /// = 41,667μs, 24 Hz)과 같은 값이다.
+  ///
+  /// 첫 갱신을 받기 전까지만 쓰인다. 그 뒤로는 [_tickEstimate] 가 실측으로
+  /// 덮으므로, 서버 틱이 바뀌어도 여기가 어긋난 채 남을 일은 없다.
+  static const double _defaultSegment = 1 / 24;
+
+  /// 구간 길이에 곱하는 여유. 1 보다 커야 한다.
+  ///
+  /// **이 값이 끊김을 없애는 핵심이다.** 배정 시간을 실측 간격과 똑같이 잡으면
+  /// 다음 갱신이 조금이라도 늦을 때마다 도착점에 닿아 **멈춘다** — 나아가다
+  /// 서고, 새 값이 오면 다시 나아가는 그 반복이 "뚝뚝 끊기며 순간이동하는"
+  /// 모습이다. 조금 느리게 지나가면 다음 값이 도착하기 전에 도달하지 않는다.
+  static const double _segmentSlack = 1.25;
+
+  /// 서버가 보낸 상태를 반영한다. 서버가 모는 개체에만 쓴다.
+  void applyServerState({
+    required Vector2 grid,
+    required double hpRatio,
+    required bool alive,
+    required bool tagged,
+    Vector2? facing,
+    int lastAttackAtMicros = 0,
+  }) {
+    _beginSegment(grid);
+
+    // **후려친 것은 사건이다.** 서버가 체력만 깎으면 어느 화면에서도 몹이
+    // 때리는 장면이 나오지 않는다 — 조용히 다가와 선 채로 사람의 체력만
+    // 줄어들어, 무엇에 맞았는지 알 수 없다.
+    //
+    // 첫 스냅샷에서는 재생하지 않는다. 시야에 들어오는 몹이 저마다 허공에
+    // 한 번씩 휘두르는 것을 막기 위해서다.
+    if (lastAttackAtMicros != _playedAttackAt) {
+      // 첫 스냅샷은 기준만 세운다. 시야에 들어오는 몹이 저마다 허공에 한 번씩
+      // 휘두르는 것을 막기 위해서다.
+      if (_playedAttackAt >= 0 && lastAttackAtMicros != 0) {
+        _serverStrike = _serverStrikeDuration;
+      }
+      _playedAttackAt = lastAttackAtMicros;
+    }
+
+    // 서버가 알려 준 방향이 있으면 그것이 맞다. **멈춰 있을 때가 이 값이 쓰이는
+    // 자리다** — 좌표가 그대로면 움직임에서 방향을 뽑을 수 없다.
+    if (facing != null && facing.length2 > 0.0001) {
+      _serverFacing = (_serverFacing ?? Vector2.zero())..setFrom(facing);
+    }
+    if (hpRatio < _serverHpRatio) {
+      // 남이 때린 것도 여기로 온다. 누가 때렸든 같은 연출이 나와야 여럿이
+      // 함께 때리는 것이 화면에서 읽힌다.
+      _hitFlash = 1;
+      _healthBarTimer = 2.5;
+
+      // **깎인 만큼을 숫자로 띄운다.** 서버로 판정을 옮기면서 이 숫자가 통째로
+      // 사라졌다 — 때린 본인 화면에도 없었다. 얼마나 아픈지 보이지 않으면
+      // 무기를 바꿀지 도망갈지 판단할 수 없다.
+      //
+      // 서버가 준 비율의 차이로 되짚는다. 정확한 피해량을 서버가 따로 보내지는
+      // 않지만, 최대 체력을 곱하면 화면에 띄우기에 충분히 가깝다.
+      final taken = (_serverHpRatio - hpRatio) * _maxHp;
+      if (taken >= 1 && isMounted) {
+        game.spawnEffect(
+          DamageText(
+            grid: grid.clone(),
+            z: z + 0.9,
+            amount: taken,
+            color: taggedByMe ? GamePalette.bladeCore : GamePalette.textDim,
+          ),
+        );
+      }
+    }
+    _serverHpRatio = hpRatio;
+
+    // **쓰러짐은 사건이다.** 서버가 `alive` 를 내리는 순간을 붙잡아야 폭발과
+    // 처치 점수가 나온다. 값만 갈아 두면 시체가 멀쩡히 선 채로 남고, 되살아날
+    // 때까지(20초) 다른 사람들 화면에서는 "안 죽는 몹" 으로 보인다.
+    //
+    // 누가 막타를 넣었든 모두의 화면에서 같은 연출이 나와야 한다 — 함께 때린
+    // 것이 화면에서 읽히는 유일한 순간이다.
+    if (_serverAlive && !alive) {
+      _serverAlive = false;
+      taggedByMe = tagged;
+      // 아직 월드에 붙지 않은 몸은 연출을 낼 곳이 없다. 스트리밍이 만든 직후
+      // 첫 스냅샷을 넣는 순간이 그렇고, 그때 폭발을 시도하면 게임을 찾지 못해
+      // 그 자리에서 죽는다. 상태만 내려 두면 붙지 않은 몸은 그려지지도 않는다.
+      if (isMounted) _die();
+      return;
+    }
+
+    _serverAlive = alive;
+    taggedByMe = tagged;
+  }
+
   late final double _maxHp;
   late double _hp;
 
   @override
-  double get hp => _hp;
+  double get hp => isServerDriven ? _maxHp * _serverHpRatio : _hp;
 
   @override
   double get maxHp => _maxHp;
+
+  /// 서버가 모는 개체의 생사는 서버가 정한다.
+  ///
+  /// 체력 비율로도 유추할 수 있지만, 되살아나는 순간(체력이 가득 찬 채로
+  /// `alive` 만 바뀌는 경우)을 놓치지 않으려면 서버가 보낸 값을 그대로 쓴다.
+  @override
+  bool get isAlive => isServerDriven ? _serverAlive : hp > 0;
 
   EnemyPhase phase = EnemyPhase.idle;
 
@@ -160,6 +336,15 @@ class Enemy extends IsoEntity with Damageable {
     if (_hitFlash > 0) _hitFlash = math.max(0, _hitFlash - dt * 3.5);
     if (_healthBarTimer > 0) _healthBarTimer -= dt;
 
+    // 서버가 모는 개체는 스스로 판단하지 않는다. 위치도 체력도 서버가 정하고
+    // 여기서는 맞은 연출만 흐른다. 로컬 AI 를 돌리면 화면마다 다른 곳으로
+    // 움직여, 같은 몹을 함께 때리는 일이 성립하지 않는다.
+    if (isServerDriven) {
+      _followServer(dt);
+      super.update(dt);
+      return;
+    }
+
     if (!isAlive) {
       super.update(dt);
       return;
@@ -168,6 +353,101 @@ class Enemy extends IsoEntity with Damageable {
     _updateAi(dt);
     _applyKnockback(dt);
     super.update(dt);
+  }
+
+  /// 새 서버 좌표를 받아 보간 구간을 연다.
+  ///
+  /// 갱신 간격을 실측해 구간 길이로 삼는다. 서버 틱이 바뀌어도 클라이언트가
+  /// 저절로 따라가고, 네트워크가 흔들려도 평균 쪽으로 수렴한다.
+  void _beginSegment(Vector2 serverGrid) {
+    // **같은 좌표가 다시 오면 아무것도 하지 않는다.** 스트리밍은 서버 갱신과
+    // 무관한 주기로 도므로, 올 때마다 구간을 다시 열면 지나온 시간이 매번 0 으로
+    // 돌아가 진행도가 한 프레임분에 머문다. 그러면 등속 보간이 지수 감쇠로
+    // 퇴화해 다시 끊겨 보인다.
+    final to = _segTo;
+    if (to != null && (to - serverGrid).length2 < 1e-6) return;
+
+    final now = DateTime.now();
+    final last = _lastServerAt;
+    _lastServerAt = now;
+
+    if (last != null) {
+      final gap = now.difference(last).inMicroseconds / 1e6;
+      // 터무니없는 값은 버린다 — 탭 전환으로 프레임이 멈췄거나 재구독으로
+      // 한참 만에 온 갱신까지 평균에 넣으면 이후 움직임이 통째로 늘어진다.
+      if (gap > 0.02 && gap < 1.0) {
+        _tickEstimate = _tickEstimate * 0.7 + gap * 0.3;
+      }
+    }
+
+    (_segFrom ??= Vector2.zero()).setFrom(grid);
+    (_segTo ??= Vector2.zero()).setFrom(serverGrid);
+    _segElapsed = 0;
+    _segDuration = _tickEstimate * _segmentSlack;
+  }
+
+  /// 서버가 준 두 좌표 사이를 **시간으로** 지나간다.
+  ///
+  /// 화면을 부드럽게 하려는 것이지 판정을 흉내 내는 것이 아니다. 사거리·피해는
+  /// 언제나 서버가 정하고, 여기서 계산한 위치는 그리기에만 쓴다.
+  ///
+  /// 목표를 향해 남은 거리에 비례해 다가가는 방식(지수 감쇠)을 쓰지 않는다.
+  /// 그 방식은 가까워질수록 느려져 **도착 직전에 기어가다** 새 값이 오면 다시
+  /// 튀어 나가므로, 등속으로 걷는 것이 아니라 매 갱신마다 멈칫거리는 모습이
+  /// 된다. 구간을 시간으로 나누면 처음부터 끝까지 같은 속도로 지나간다.
+  void _followServer(double dt) {
+    final from = _segFrom;
+    final to = _segTo;
+    if (from == null || to == null) return;
+
+    if ((to - grid).length > 8) {
+      // 리스폰이나 텔레포트처럼 멀리 옮겨졌다. 월드를 가로질러 미끄러지는
+      // 모습이 더 이상하므로 곧바로 옮긴다.
+      grid.setFrom(to);
+      from.setFrom(to);
+      _segElapsed = _segDuration;
+      phase = EnemyPhase.idle;
+      _applyFacing(null);
+      return;
+    }
+
+    final span = to - from;
+    final moving = span.length > 0.01;
+
+    if (_segElapsed < _segDuration) {
+      _segElapsed += dt;
+      final t = (_segElapsed / _segDuration).clamp(0.0, 1.0);
+      grid
+        ..setFrom(from)
+        ..addScaled(span, t);
+    }
+
+    // 후려치는 중이면 그 자세가 이긴다. 렌더가 이 상태를 보고 공격 자세를
+    // 그리므로, 걷는 모습으로 덮어 두면 때리는 장면이 사라진다.
+    if (_serverStrike > 0) {
+      _serverStrike = math.max(0, _serverStrike - dt);
+      phase = EnemyPhase.strike;
+    } else {
+      phase = moving ? EnemyPhase.chase : EnemyPhase.idle;
+    }
+    _applyFacing(moving ? span : null);
+  }
+
+  /// 바라보는 쪽을 정한다. **서버가 준 방향이 언제나 이긴다.**
+  ///
+  /// 이동에서 뽑은 방향은 대체품이다 — 멈춰 서서 때리는 몹은 좌표가 그대로라
+  /// 이동에서는 아무것도 나오지 않고, 그러면 마지막으로 걸어온 쪽을 계속
+  /// 바라보게 된다. 옆으로 돌아 들어간 사람에게는 제 등을 향해 휘두르는
+  /// 몹으로 보인다.
+  void _applyFacing(Vector2? movement) {
+    final server = _serverFacing;
+    if (server != null && server.length2 > 0.0001) {
+      facing.setFrom(server.normalized());
+      return;
+    }
+    if (movement != null && movement.length2 > 0.0001) {
+      facing.setFrom(movement.normalized());
+    }
   }
 
   void _updateAi(double dt) {
@@ -407,6 +687,17 @@ class Enemy extends IsoEntity with Damageable {
   @override
   void applyDamage(double amount, {Vector2? knockback, bool critical = false}) {
     if (!isAlive) return;
+
+    // 서버가 모는 개체는 **여기서 체력을 깎지 않는다.** 때렸다는 사실만 서버에
+    // 알리고, 얼마나 깎였는지는 서버가 정해 표로 돌려준다. 로컬에서 미리 깎으면
+    // 서버가 거절했을 때(사거리 밖·쿨다운) 화면과 서버가 어긋나고, 그 어긋남은
+    // "분명히 때렸는데 안 죽는" 형태로 나타난다.
+    if (isServerDriven) {
+      game.presence.attack(serverId!);
+      GameAudio.play(Sfx.robotHit, at: grid);
+      return;
+    }
+
     _hp = math.max(0, _hp - amount);
     _hitFlash = 1;
     _healthBarTimer = 2.5;
@@ -1036,7 +1327,10 @@ class Enemy extends IsoEntity with Damageable {
     final width = isBoss ? 96.0 : 46.0 * s;
     final height = isBoss ? 8.0 : 5.0;
     final top = isBoss ? -150.0 : -108.0 * s;
-    final ratio = (_hp / _maxHp).clamp(0.0, 1.0);
+    // **`hp` 게터를 쓴다.** 서버가 모는 몹은 `_hp` 필드가 갱신되지 않으므로
+    // 그것을 직접 읽으면 아무리 때려도 바가 가득 찬 채로 남는다 — 맞고 있는지
+    // 조차 화면에서 읽히지 않는다.
+    final ratio = (hp / _maxHp).clamp(0.0, 1.0);
 
     final rect = Rect.fromLTWH(-width / 2, top, width, height);
     canvas.drawRRect(

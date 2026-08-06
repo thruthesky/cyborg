@@ -16,6 +16,7 @@ import '../systems/rest_recovery.dart';
 import '../systems/weapon.dart';
 import 'cyborg_design.dart';
 import 'cyborg_renderer.dart';
+import 'enemy.dart';
 import 'iso_entity.dart';
 import 'pickup.dart';
 import 'projectile.dart';
@@ -44,7 +45,12 @@ class Player extends IsoEntity with Damageable {
   ///
   /// 몬스터가 주는 피해가 곧 그 몬스터의 레벨이므로(1~200), 이 값은
   /// "레벨 N 몬스터에게 몇 대까지 버티는가"를 그대로 뜻한다.
-  static const double baseMaxHp = 2500;
+  ///
+  /// **서버(`world.rs` 의 `BASE_MAX_HP`)와 같아야 한다.** 체력은 이제 서버가
+  /// 정하고 클라이언트는 그 값을 받아 그린다 — 여기가 어긋나면 화면의 최대
+  /// 체력과 실제로 버티는 양이 서로 다른 말을 한다.
+  /// `test/server_authority_contract_test.dart` 가 이 약속을 지킨다.
+  static const double baseMaxHp = 10000;
 
   double _hp = baseMaxHp;
   double _maxHp = baseMaxHp;
@@ -222,6 +228,9 @@ class Player extends IsoEntity with Damageable {
   int _comboStep = 0;
   double _comboWindow = 0;
   bool _meleeHitApplied = false;
+
+  /// 이번 스윙이 지목한 대상. null 이면 앞의 모든 것을 벤다.
+  Enemy? _meleeTarget;
   final List<_DashGhost> _ghosts = [];
 
   static const double _meleeDuration = 0.32;
@@ -247,8 +256,20 @@ class Player extends IsoEntity with Damageable {
   // ── 입력 진입점 ─────────────────────────────────────────────────────
 
   /// 근접 공격을 시도한다. 무엇을 어떻게 휘두를지는 무기 계통이 정한다.
-  void tryMelee() {
+  ///
+  /// [target] 을 주면 **그 대상만** 판정한다. 자동 사냥처럼 "이 몹을 잡는다"
+  /// 가 분명한 호출자를 위한 것이다. 서버가 모는 몹은 타격 한 번이 reducer
+  /// 한 번이라, 옆에 선 몹까지 훑으면 그만큼 요청이 나가고 서버는 공격
+  /// 쿨다운으로 첫 건 말고 전부 거절한다 — 사람과 달리 쉬지 않고 휘두르는
+  /// 자동 사냥에서는 그 낭비가 끝없이 쌓인다.
+  ///
+  /// 주지 않으면 기존대로 전방 부채꼴을 훑는다. 손으로 휘두르는 칼은 눈앞의
+  /// 것을 한꺼번에 베는 맛이 있어야 하므로 수동 조작은 그대로 둔다.
+  void tryMelee({Enemy? target}) {
     if (!isAlive || _meleeCooldown > 0 || isDashing) return;
+    _meleeTarget = target;
+    // 콤보 길이는 계통이 정한다(1~4). 3 으로 박아 두면 드라이버(1타)와
+    // 탈론(4타)이 블레이드의 리듬으로 휘둘러져 마무리가 엉뚱한 타에 걸린다.
     final weaponClass = weapon.weaponClass;
     _comboStep =
         _comboWindow > 0 ? (_comboStep + 1) % weaponClass.comboLength : 0;
@@ -286,23 +307,67 @@ class Player extends IsoEntity with Damageable {
   ///
   /// 1레벨 마력 5,000으로 약 83발을 쏠 수 있다. 사냥 한 바퀴를 넉넉히
   /// 돌 만큼이되, 무한정 난사하면 거점으로 돌아가 쉬어야 한다.
+  ///
+  /// 서버 `SKILL_PLASMA.mp_cost` 와 같아야 한다 — 실제로 마력을 깎는 것은
+  /// 서버이고, 이 값은 "쏠 수 있는가" 를 미리 가려 헛손질을 줄이는 데만 쓴다.
   static const double plasmaMpCost = 60;
 
+  /// 서버가 아는 플라즈마 스킬의 이름. 서버 `skill_spec` 의 열쇠다.
+  static const String plasmaSkillId = 'plasma';
+
   /// 플라즈마 볼트를 발사한다. 마력을 쓴다.
-  void tryShoot() {
+  ///
+  /// **마력을 깎고 피해를 넣는 것은 서버다.** 여기서 하는 일은 쏘는 시늉과
+  /// 서버에 의도를 알리는 것뿐이다. 화면의 발사체는 연출이며, 그것이 몹에
+  /// 닿았는지는 아무것도 결정하지 않는다 — 판정은 서버가 자기 좌표로 이미 했다.
+  ///
+  /// 대상을 [target] 으로 받는 이유는 서버가 "누구를 쏘았는가" 를 알아야 하기
+  /// 때문이다. 서버는 발사체를 시뮬레이션하지 않는다(고주파 틱이 필요하고 그
+  /// 비용이 지금 얻는 것보다 크다). 대상이 없으면 연출만 나가고 판정은 없다.
+  void tryShoot({Enemy? target}) {
     if (!isAlive || _shootCooldown > 0) return;
     if (mp < plasmaMpCost) {
       GameAudio.play(Sfx.uiError);
       return;
     }
     _shootCooldown = 0.24;
-    mp -= plasmaMpCost;
-    final dir = facing.clone()..normalize();
+
+    // 대상을 지목하지 않았으면 바라보는 쪽에서 찾는다. 조준은 조작 편의이고,
+    // 사거리·명중 여부는 어차피 서버가 자기 좌표로 다시 본다.
+    final aimed = target ?? _aimTarget();
+    final monsterId = aimed?.serverId;
+    if (monsterId != null) {
+      // 서버가 마력·쿨다운·사거리·피해를 판정한다. 거절당하면 마력은 줄지 않고,
+      // 화면의 마력 바는 다음 갱신에서 제자리로 돌아온다.
+      game.presence.castSkill(plasmaSkillId, monsterId);
+
+      // 서버 답이 오기 전까지의 표시용 예측. 다음 갱신이 서버 값으로 덮는다.
+      // 이걸 빼면 연타할 때 마력 바가 한 박자 늦게 줄어 "쐈는데 안 줄었다" 로
+      // 보인다. 서버에 보내지 못했으면(대상 없음) 깎지 않는다 — 서버는 마력을
+      // 쓰지 않았는데 화면만 줄어들면 다음 갱신에 되돌아와 눈에 띄게 튄다.
+      mp = math.max(0, mp - plasmaMpCost);
+    } else if (!game.presence.isAvailable) {
+      // 오프라인에서는 여기가 유일한 소비 지점이다.
+      mp = math.max(0, mp - plasmaMpCost);
+    }
+
+    // 볼트는 **조준한 쪽으로** 날아간다. 바라보는 방향으로만 쏘면 서버에 보낸
+    // 대상과 화면의 궤적이 갈라져, 옆에 선 적이 맞는 것처럼 보인다.
+    final dir = aimed != null && (aimed.grid - grid).length2 > 0.0001
+        ? (aimed.grid - grid).normalized()
+        : (facing.clone()..normalize());
+    // 총구가 궤적을 따라가야 쏘는 자세와 날아가는 방향이 어긋나지 않는다.
+    facing.setFrom(dir);
+
     game.spawnProjectile(
       Projectile(
         grid: grid + dir * 0.4,
         direction: dir,
         speed: 9.5,
+        // 서버에 붙어 있으면 이 값으로는 아무것도 깎이지 않는다 — 판정은 위
+        // `castSkill` 에서 이미 끝났고, 이 볼트는 그 결과를 그리는 연출이다.
+        // 서버 몹은 `Damageable.isServerJudged` 로 걸러진다. 오프라인 모드에서는
+        // 이것이 유일한 피해다.
         damage: effectiveRangedDamage,
         owner: ProjectileOwner.player,
         z: 0.62,
@@ -313,6 +378,31 @@ class Player extends IsoEntity with Damageable {
     game.shakeCamera(2.5, 0.08);
     GameAudio.play(Sfx.plasmaShot);
   }
+
+  /// 플라즈마가 날아갈 쪽에서 대상을 고른다.
+  ///
+  /// 바라보는 반쪽(내적이 양수) 안에서 가장 가까운 서버 몹을 집는다. 등 뒤의
+  /// 적이 잡히면 총구는 앞을 보는데 뒤가 죽어 화면과 판정이 어긋나 보인다.
+  Enemy? _aimTarget() {
+    final aim = facing.length2 > 0.0001 ? facing.normalized() : Vector2(1, 0);
+    Enemy? best;
+    var bestDistance = plasmaAimRange;
+
+    for (final enemy in game.enemies) {
+      if (!enemy.isAlive || enemy.serverId == null) continue;
+      final to = enemy.grid - grid;
+      final distance = to.length;
+      if (distance > bestDistance) continue;
+      // 정면 반쪽 밖은 거른다.
+      if (distance > 0.001 && to.normalized().dot(aim) < 0) continue;
+      best = enemy;
+      bestDistance = distance;
+    }
+    return best;
+  }
+
+  /// 조준이 닿는 거리(타일). 서버 `SKILL_PLASMA.range_tiles` 와 같아야 한다.
+  static const double plasmaAimRange = 10;
 
   /// 회피 대시를 시도한다.
   void tryDash() {
@@ -369,6 +459,13 @@ class Player extends IsoEntity with Damageable {
   ///
   /// 지금 거점은 월드 한가운데의 안전지대뿐이다. 아지트가 생기면
   /// 판정만 넓히면 되고 회복 규칙은 그대로 쓴다.
+  ///
+  /// **월드에 접속해 있으면 실제 회복은 서버가 한다**(`regen_tick`). 여기서
+  /// 채우는 값은 서버 갱신 사이를 메우는 예측일 뿐이고, 다음 갱신이 오면
+  /// 서버 값으로 덮인다. 그런데도 계속 굴리는 이유는 회복 표시(`isRecovering`)와
+  /// 피격 대기(`notifyDamaged`)가 화면에 필요하기 때문이다.
+  ///
+  /// 서버에 붙지 않은 오프라인·프리뷰 모드에서는 이 계산이 유일한 회복이다.
   void _updateRest(double dt) {
     rest.update(dt, sheltered: game.map.safeZone.containsPoint(grid));
 
@@ -557,7 +654,14 @@ class Player extends IsoEntity with Damageable {
     final arcDot = weapon.weaponClass.arcDot;
     var hitAny = false;
 
-    for (final target in game.meleeTargets()) {
+    // 지목된 대상이 있으면 그것만 본다. 사거리·부채꼴 판정은 그대로 거치므로,
+    // 지목했다고 닿지 않는 자리에서 서버에 요청이 나가지는 않는다.
+    final focused = _meleeTarget;
+    final candidates =
+        focused != null ? <Damageable>[focused] : game.meleeTargets();
+    _meleeTarget = null;
+
+    for (final target in candidates) {
       // 목록은 스냅샷이다. 앞선 대상을 때려 죽인 뒤에도 계속 돌기 때문에,
       // 이미 쓰러진 대상은 여기서 걸러야 시체에 타격 이펙트가 남지 않는다.
       if (!target.isAlive) continue;
@@ -584,6 +688,16 @@ class Player extends IsoEntity with Damageable {
           color: weapon.glow,
         ),
       );
+    }
+
+    // **PK.** 같은 스윙이 사람에게도 닿는다. 피해는 여기서 넣지 않는다 —
+    // 안전지대 면역·사거리·쿨다운을 서버가 보고, 거절되면 아무 일도 일어나지
+    // 않아야 한다. 로컬에서 미리 깎으면 서버가 거절한 공격이 내 화면에서만
+    // 명중해, 같은 싸움을 두 사람이 다르게 보게 된다.
+    final pkTarget = game.remoteTargetInArc(grid, dir, meleeRange);
+    if (pkTarget != null) {
+      game.presence.attackPlayer(pkTarget);
+      hitAny = true;
     }
 
     if (hitAny) {
@@ -730,6 +844,9 @@ class Player extends IsoEntity with Damageable {
     _comboStep = 0;
     _comboWindow = 0;
     _meleeHitApplied = true;
+    // 중단된 스윙이 노리던 몹은 여기 두고 간다. 그러지 않으면 사라진 개체를
+    // 계속 붙들고 있게 된다.
+    _meleeTarget = null;
     _hazardTick = 0;
     _invulnerable = respawnInvulnerability;
 
@@ -766,11 +883,169 @@ class Player extends IsoEntity with Damageable {
     _comboStep = 0;
     _comboWindow = 0;
     _meleeHitApplied = true;
+    // 중단된 스윙이 노리던 몹은 여기 두고 간다. 그러지 않으면 사라진 개체를
+    // 계속 붙들고 있게 된다.
+    _meleeTarget = null;
     // 밟고 있던 유해 지형의 누적을 새 지형으로 끌고 가지 않는다.
     _hazardTick = 0;
 
     syncTransform();
   }
+
+  // ── 서버 권위 ───────────────────────────────────────────────────────
+  //
+  // 체력·마력·사망·좌표의 진실은 서버에 있다. 아래 두 메서드가 그 진실을 몸에
+  // 옮겨 담는 유일한 통로이며, 여기를 거치지 않은 값은 화면을 위한 예측일 뿐이다.
+
+  /// 서버가 확정한 체력·마력을 받아들인다.
+  ///
+  /// 예측으로 벌어진 차이를 **즉시** 맞춘다 — 체력은 부드럽게 수렴시킬 값이
+  /// 아니다. 서버가 "너는 3,200 이다" 라고 하면 화면도 3,200 이어야 하고,
+  /// 그 사이를 lerp 로 메우면 이미 죽은 몸이 잠깐 살아 있는 것으로 보인다.
+  void adoptServerVitals({
+    required int hp,
+    required int maxHp,
+    required int mp,
+    required int maxMp,
+  }) {
+    _maxHp = maxHp.toDouble();
+    _hp = hp.toDouble().clamp(0, _maxHp);
+    _maxMp = maxMp.toDouble();
+    this.mp = mp.toDouble().clamp(0, _maxMp);
+  }
+
+  /// 서버가 때린 결과를 **연출로만** 재생한다.
+  ///
+  /// 체력은 건드리지 않는다 — 그건 이미 [adoptServerVitals] 가 서버 값으로
+  /// 맞췄다. 여기서 또 깎으면 같은 피해를 두 번 먹는다.
+  ///
+  /// 이 함수가 필요한 이유는, 서버 판정으로 옮기면서 **맞는 장면이 통째로
+  /// 사라졌기** 때문이다. 로컬 판정 시절에는 [applyDamage] 가 숫자·흔들림·
+  /// 소리를 함께 냈는데, 서버가 판정하게 되자 남은 것은 게이지가 조용히
+  /// 줄어드는 것뿐이었다. 무엇에 맞았는지도, 맞긴 맞았는지도 알 수 없다.
+  void playHurtReaction(double taken) {
+    if (!isAlive) return;
+
+    if (taken > 0) {
+      game.spawnEffect(
+        DamageText(
+          grid: grid.clone(),
+          z: 1.0,
+          amount: taken,
+          color: GamePalette.hpFillLow,
+        ),
+      );
+    }
+    game.shakeCamera(9, 0.2);
+    game.onPlayerDamaged();
+    GameAudio.play(
+      Sfx.playerHurt,
+      volumeScale: (0.5 + taken / (_maxHp * 0.02)).clamp(0.5, 1.2),
+    );
+  }
+
+  /// 서버가 확정한 좌표로 예측 위치를 끌어당긴다.
+  ///
+  /// 라리엔의 적응형 보정과 같은 방식이다 — 오차 크기에 따라 당기는 세기를
+  /// 바꾼다. 고정 계수를 쓰면 둘 중 하나가 반드시 깨진다: 세게 당기면 평소
+  /// 이동이 뒤로 밀려 조작감이 무너지고(rubber-band), 약하게 당기면 텔레포트나
+  /// 패킷 유실 뒤에 영영 어긋난 채로 남는다.
+  ///
+  /// [dt] 는 이번 프레임의 시간이다. 프레임률이 달라도 같은 속도로 수렴하도록
+  /// 계수를 시간으로 환산한다.
+  void reconcileServerGrid(Vector2 serverGrid, double dt) {
+    // **서버 좌표는 내 과거다.** 보낸 값이 처리되어 구독으로 돌아오기까지 한
+    // 왕복이 걸리고(실측 300~500 ms), 그동안 나는 계속 걷는다. 그래서 지금
+    // 위치와 견주면 늘 한두 타일 벌어져 있는데, 그것은 어긋남이 아니라 **지연**
+    // 이다. 그 간격을 오차로 보고 당기면 걸을수록 뒤로 끌린다 — 고무줄이다.
+    //
+    // 그래서 지금 위치가 아니라 **내가 지나온 자취**와 견준다. 서버가 그 자취
+    // 위 어딘가에 있으면 나를 따라오는 중이니 손대지 않는다. 자취에서 벗어나
+    // 있을 때만 진짜로 어긋난 것이다 — 벽을 뚫으려 했거나, 서버가 속도 상한으로
+    // 잘랐거나, 텔레포트·재가동으로 옮겨졌을 때다.
+    final error = _distanceFromTrail(serverGrid);
+    if (error < _reconcileDeadzone) return;
+
+    // 크게 어긋났으면 보정이 아니라 순간이동이다. 텔레포트·재가동·긴 끊김이
+    // 여기 걸리며, 이때 천천히 걸어가면 그 사이 남의 화면 속 나와 내 화면 속
+    // 내가 다른 곳에 있다.
+    if (error > _reconcileSnapDistance) {
+      grid.setFrom(serverGrid);
+      clearMoveTarget();
+      syncTransform();
+      _trail.clear();
+      return;
+    }
+
+    // 그 외에는 부드럽게 당긴다. 오차가 클수록 세게 당겨, 평소 이동은
+    // 건드리지 않으면서 벌어진 차이는 확실히 좁힌다.
+    //
+    // 자취를 지운다 — 어긋남이 확인된 이상 옛 자취는 더 이상 "따라오는 중" 의
+    // 증거가 아니고, 남겨 두면 다음 판정에서 그 옛 자리가 어긋남을 가린다.
+    _trail.clear();
+    final strength = error > _reconcileHardError
+        ? _reconcileHardRate
+        : _reconcileSoftRate;
+    final t = (1 - math.exp(-strength * dt)).clamp(0.0, 1.0);
+    grid.setValues(
+      grid.x + (serverGrid.x - grid.x) * t,
+      grid.y + (serverGrid.y - grid.y) * t,
+    );
+  }
+
+  /// 자취에서 이만큼 벗어나야 보정한다(타일).
+  ///
+  /// 자취와 견주므로 왕복 지연은 이미 걸러진다. 남는 것은 좌표를 띄엄띄엄
+  /// 보내는 데서 오는 톱니(보고 주기 0.1 초 × 초당 3.6 타일 = 0.36 타일)뿐이라
+  /// 작게 잡아도 된다.
+  static const double _reconcileDeadzone = 0.5;
+
+  /// 내가 지나온 자취. 서버에 보고한 좌표를 시각과 함께 남긴다.
+  ///
+  /// 서버가 이 위 어딘가에 있으면 "따라오는 중" 이고, 벗어나 있으면 "어긋남" 이다.
+  final List<({DateTime at, Vector2 grid})> _trail = [];
+
+  /// 자취를 남겨 두는 시간. 왕복 지연의 몇 배는 되어야 한다.
+  static const Duration _trailWindow = Duration(seconds: 3);
+
+  /// 서버에 보고한 좌표를 자취에 남긴다.
+  ///
+  /// 보고하는 쪽에서 부른다 — 서버가 실제로 받는 것이 이 값들이므로, 화면의
+  /// 매 프레임 위치가 아니라 **보낸 값**을 남겨야 견줄 수 있다.
+  void recordReportedGrid(Vector2 reported) {
+    final now = DateTime.now();
+    _trail.add((at: now, grid: reported.clone()));
+    // 오래된 것은 버린다. 남겨 두면 한참 전에 지나온 자리가 지금의 어긋남을
+    // 가려 준다.
+    final cutoff = now.subtract(_trailWindow);
+    _trail.removeWhere((entry) => entry.at.isBefore(cutoff));
+  }
+
+  /// 자취에서 [point] 까지의 가장 가까운 거리.
+  ///
+  /// 자취가 비어 있으면(막 태어났거나 오프라인) 지금 위치와 견준다.
+  double _distanceFromTrail(Vector2 point) {
+    if (_trail.isEmpty) return point.distanceTo(grid);
+    var best = point.distanceTo(grid);
+    for (final entry in _trail) {
+      final d = point.distanceTo(entry.grid);
+      if (d < best) best = d;
+    }
+    return best;
+  }
+
+  /// 이보다 크게 어긋나면 보정 대신 즉시 맞춘다(타일).
+  static const double _reconcileSnapDistance = 24;
+
+  /// 이보다 크면 세게 당긴다(타일).
+  ///
+  /// 무시 구간([_reconcileDeadzone])보다 커야 의미가 있다. 그 사이가 "천천히
+  /// 좁히는" 구간이다.
+  static const double _reconcileHardError = 4.0;
+
+  /// 초당 수렴 계수. 값이 클수록 빨리 붙는다.
+  static const double _reconcileSoftRate = 2.0;
+  static const double _reconcileHardRate = 8.0;
 
   /// 체력을 회복하고 실제로 채워진 양을 돌려준다.
   ///

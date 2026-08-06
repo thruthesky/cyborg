@@ -166,24 +166,27 @@ void main() {
   });
 
   group('체력 성장', () {
-    test('레벨업 한 번에 최대 체력이 250 늘어난다', () {
+    // 체력은 이제 서버가 정한다(`world.rs` 의 `BASE_MAX_HP`·`HP_PER_LEVEL`).
+    // 여기서 지키는 것은 성장의 **모양**이고, 서버와 같은 값인지는
+    // `test/server_authority_contract_test.dart` 가 따로 지킨다.
+    test('레벨업 한 번에 최대 체력이 1,000 늘어난다', () {
       // 강화 구간(5의 배수)이라고 더 주지 않는다.
       for (var level = 2; level <= 200; level++) {
         expect(
           LevelSystem.gainsFor(level).maxHp,
-          250,
-          reason: '레벨 $level 의 체력 성장폭이 250이 아니다',
+          1000,
+          reason: '레벨 $level 의 체력 성장폭이 1,000이 아니다',
         );
       }
     });
 
-    test('레벨 N의 최대 체력은 2,500 + (N-1) × 250 이다', () {
+    test('레벨 N의 최대 체력은 10,000 + (N-1) × 1,000 이다', () {
       var maxHp = Player.baseMaxHp;
       for (var level = 2; level <= 50; level++) {
         maxHp += LevelSystem.gainsFor(level).maxHp;
         expect(
           maxHp,
-          Player.baseMaxHp + (level - 1) * 250,
+          Player.baseMaxHp + (level - 1) * 1000,
           reason: '레벨 $level 의 누적 최대 체력이 어긋난다',
         );
       }
