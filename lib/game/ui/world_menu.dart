@@ -7,7 +7,7 @@ import 'package:flutter/material.dart';
 import '../palette.dart';
 
 /// 서브메뉴 한 줄에 그릴 아이콘.
-enum WorldMenuIcon { character, leaderboard, teleport, logout }
+enum WorldMenuIcon { character, leaderboard, teleport, info, logout }
 
 /// 월드 메뉴에서 펼쳐지는 서브메뉴 항목 하나.
 class WorldMenuEntry {
@@ -372,6 +372,32 @@ class WorldMenu extends PositionComponent with TapCallbacks {
           false,
           stroke,
         );
+      case WorldMenuIcon.info:
+        // 동그라미 안의 i. 어느 화면에서나 "설명" 으로 읽히는 모양이다.
+        canvas.drawCircle(
+          center,
+          9,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 1.8
+            ..color = color,
+        );
+        // 점과 세로획. 글자를 그리지 않는 것은 다른 아이콘과 선 굵기를 맞추기
+        // 위해서다 — 폰트를 섞으면 이 아이콘만 도드라진다.
+        canvas.drawCircle(
+          Offset(center.dx, center.dy - 4.2),
+          1.3,
+          Paint()..color = color,
+        );
+        canvas.drawLine(
+          Offset(center.dx, center.dy - 1),
+          Offset(center.dx, center.dy + 4.5),
+          Paint()
+            ..strokeWidth = 1.8
+            ..strokeCap = StrokeCap.round
+            ..color = color,
+        );
+
       case WorldMenuIcon.leaderboard:
         // 순위를 나타내는 세 개의 시상대. 가운데가 1위로 가장 높다.
         final fill = Paint()..color = color.withValues(alpha: 0.22);

@@ -1,5 +1,7 @@
 import 'dart:math' as math;
 
+import 'dart:ui';
+
 import 'package:flame/components.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -131,6 +133,31 @@ void main() {
       greaterThanOrEqualTo(80),
       reason: '화면 안 몹 80 기 중 $drawn 기만 그렸다 — 표시 상한이 화면을 굶긴다',
     );
+  });
+
+  test('서버 정보 화면이 실제로 그려진다', () async {
+    // 캔버스 코드는 실행해 봐야 안다 — 컴파일은 되는데 그리는 순간 죽는
+    // 실수(폰트·널·범위)가 흔하다. 메뉴에서 열어 한 프레임 그려 본다.
+    final game = ActionRpgGame(presence: _FakePresence([]), autoStart: true);
+    game.onGameResize(Vector2(1280, 800));
+    await game.onLoad();
+    for (final joystick
+        in game.descendants().whereType<JoystickComponent>().toList()) {
+      joystick.removeFromParent();
+    }
+
+    game.openServerInfo();
+    expect(game.isServerInfoOpen, isTrue, reason: '메뉴에서 열리지 않는다');
+
+    // 열림 애니메이션이 진행되어 실제로 칠해지는 상태까지 돌린다.
+    for (var i = 0; i < 30; i++) {
+      game.update(1 / 60);
+    }
+
+    final recorder = PictureRecorder();
+    final canvas = Canvas(recorder);
+    game.render(canvas);          // 여기서 던지면 테스트가 잡는다
+    recorder.endRecording().dispose();
   });
 
   test('몸의 화면 좌표가 그리드를 따라간다', () async {

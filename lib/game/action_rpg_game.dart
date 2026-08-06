@@ -49,6 +49,7 @@ import 'ui/party_panel.dart';
 import 'ui/hud.dart';
 import 'ui/inventory_ui.dart';
 import 'ui/leaderboard_screen.dart';
+import 'ui/server_info_screen.dart';
 import 'ui/mute_button.dart';
 import 'ui/teleport_sheet.dart';
 import 'ui/touch_controls.dart';
@@ -130,6 +131,7 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   late InventoryPanel _inventoryPanel;
   late CharacterScreen _characterScreen;
   late LeaderboardScreen _leaderboardScreen;
+  late ServerInfoScreen _serverInfoScreen;
   late TeleportSheet _teleportSheet;
   late WorldMenu _worldMenu;
 
@@ -480,6 +482,7 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     _inventoryPanel = InventoryPanel();
     _characterScreen = CharacterScreen();
     _leaderboardScreen = LeaderboardScreen(source: leaderboard);
+    _serverInfoScreen = ServerInfoScreen();
     _teleportSheet = TeleportSheet();
     _partyPanel = PartyPanel();
     _partyInviteCard = PartyInviteCard();
@@ -506,6 +509,11 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
           icon: WorldMenuIcon.teleport,
           onSelected: openTeleportSheet,
         ),
+        WorldMenuEntry(
+          label: '정보',
+          icon: WorldMenuIcon.info,
+          onSelected: openServerInfo,
+        ),
         // 계정을 붙이지 않은 오프라인 실행에서는 로그아웃할 것이 없다.
         if (onLogout != null)
           WorldMenuEntry(
@@ -528,6 +536,7 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
       _inventoryPanel,
       _characterScreen,
       _leaderboardScreen,
+      _serverInfoScreen,
       _teleportSheet,
     ]);
 
@@ -1813,6 +1822,7 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     _inventoryPanel.close();
     _leaderboardScreen.close();
     _teleportSheet.close();
+    _serverInfoScreen.close();
     _characterScreen.open();
     GameAudio.play(Sfx.uiClick);
   }
@@ -1842,7 +1852,25 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     _inventoryPanel.close();
     _characterScreen.close();
     _teleportSheet.close();
+    _serverInfoScreen.close();
     _leaderboardScreen.open();
+    GameAudio.play(Sfx.uiClick);
+  }
+
+  bool get isServerInfoOpen => _serverInfoScreen.isOpen;
+
+  /// 지금 붙어 있는 서버가 어디인지 보여 준다.
+  ///
+  /// 서버를 오갈 일이 잦아(로컬·자체 VPS·클라우드) "지금 보고 있는 월드가 어느
+  /// 서버인가" 를 헷갈리기 쉽다. 두 사람이 서로를 못 볼 때 가장 먼저 확인해야
+  /// 하는 것도 이것이다 — 같은 서버에 있는지.
+  void openServerInfo() {
+    if (status != GameStatus.playing) return;
+    _inventoryPanel.close();
+    _characterScreen.close();
+    _leaderboardScreen.close();
+    _teleportSheet.close();
+    _serverInfoScreen.open();
     GameAudio.play(Sfx.uiClick);
   }
 
