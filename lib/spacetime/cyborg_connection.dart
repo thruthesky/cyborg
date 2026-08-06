@@ -5,13 +5,13 @@ import 'package:spacetimedb_sdk/spacetimedb_sdk.dart';
 ///
 /// `spacetime.json` 의 `server` 와 같은 곳을 가리켜야 한다. 서버를 바꾸면
 /// 여기와 `spacetime.json` 을 함께 고친다.
-const String kCyborgHost = 'maincloud.spacetimedb.com';
+const String kCyborgHost = '167.88.45.173:3000';
 
 /// 데이터베이스 이름. `spacetime.json` 의 `database` 와 같다.
 const String kCyborgDatabase = 'withcenter-cyborg';
 
 /// maincloud 는 wss/https 로만 받는다. 로컬 서버로 바꾸면 `false` 로 둔다.
-const bool kCyborgSsl = true;
+const bool kCyborgSsl = false;
 
 /// 접속하자마자 거는 구독.
 ///
