@@ -41,13 +41,13 @@ class SpacetimeWorldPresence extends WorldPresence {
   /// 10 Hz 는 서버가 실제로 소화하는 속도에 가깝고, 보간이 메울 구간은 0.36
   /// 타일이라 걷는 모습이 각지지 않는다. 다시 올리려면 **먼저 응답 시간을
   /// 재고**, 그 값보다 주기가 길어야 의미가 있다.
-  static const Duration _fastInterval = Duration(microseconds: 100000);
+  static const Duration _fastInterval = Duration(microseconds: 33333);
 
   /// 붐빌 때 내려가는 하한. **4 Hz**.
   ///
   /// 이보다 더 낮추지 않는 이유는 보간이 메워야 할 구간이 0.9 타일이 되어,
   /// 방향을 바꾸며 뛰는 사람의 궤적이 눈에 띄게 각지기 때문이다.
-  static const Duration _slowInterval = Duration(microseconds: 250000);
+  static const Duration _slowInterval = Duration(microseconds: 125000);
 
   /// 이 인원까지는 [_fastInterval] 을 그대로 쓴다.
   ///

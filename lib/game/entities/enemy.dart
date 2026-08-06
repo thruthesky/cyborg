@@ -149,7 +149,7 @@ class Enemy extends IsoEntity with Damageable {
   ///
   /// 첫 갱신을 받기 전까지만 쓰인다. 그 뒤로는 [_tickEstimate] 가 실측으로
   /// 덮으므로, 서버 틱이 바뀌어도 여기가 어긋난 채 남을 일은 없다.
-  static const double _defaultSegment = 1 / 24;
+  static const double _defaultSegment = 1 / 30;
 
   /// 구간 길이에 곱하는 여유. 1 보다 커야 한다.
   ///

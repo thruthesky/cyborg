@@ -41,8 +41,8 @@ void main() {
       await client.reducers.enterWorld(gridX: spawn, gridY: spawn);
       await _until(() => client.myWorldPlayer != null);
 
-      // 실제 게임과 같은 조건으로 걷는다 — 10 Hz 보고, 초당 3.6 타일.
-      const hz = 10.0;
+      // 실제 게임과 같은 조건으로 걷는다 — 30 Hz 보고, 초당 3.6 타일.
+      const hz = 30.0;
       const speed = 3.6;
       const step = speed / hz;
       const frames = 120; // 5 초
@@ -78,7 +78,7 @@ void main() {
         if (me != null) drifts.add(predicted - me.gridX);
 
         await Future<void>.delayed(
-          const Duration(microseconds: 100000),
+          const Duration(microseconds: 33333),
         );
       }
 

@@ -1,3 +1,5 @@
+아래의 db 는 더 이상 쓰지 않습니다.
+
 SpacetimeDB ID: c200801738abd6e5a9121d9c38cbb6de627440dcb19fda61e9af44e82f401de3
 
 

@@ -69,12 +69,13 @@ You, as AI, must follow the instructions below.
 
 | | maincloud (무료) | 자체 VPS (전용) |
 |---|---|---|
-| AI 틱 (설정 대비 실측) | 41.7ms → **1,220ms** (30배 밀림) | 50ms → **52ms** (4% 오차) |
-| CPU | 발산 · reducer 10초 타임아웃 | **2.3%** |
+| AI 틱 (설정 대비 실측) | 41.7ms → **1,220ms** (30배 밀림) | 33.3ms → **35.6ms** (7% 오차) |
+| `move_to` 왕복 | 300~850ms | **230ms** (= 순수 네트워크. 서버 처리 ≈ 0) |
+| CPU | 발산 · reducer 10초 타임아웃 | **2.7%** |
 | 에너지 | 아무도 접속 안 해도 **3일**이면 소진 | 제한 없음 |
 
 maincloud 에서 "AOI 32 기 · 24 Hz" 로 서버가 죽었던 일이 있는데, 같은 코드가 VPS 에서는
-**20 Hz 를 CPU 2.3% 로** 돌린다. 무료 인스턴스의 문제였지 코드나 SpacetimeDB 의 문제가
+**30 Hz 를 CPU 2.7% 로** 돌린다. 무료 인스턴스의 문제였지 코드나 SpacetimeDB 의 문제가
 아니었다. **그 구별을 잊고 maincloud 수치로 성능을 판단하지 말 것.**
 
 ### 접속 정보
@@ -86,6 +87,7 @@ maincloud 에서 "AOI 32 기 · 24 Hz" 로 서버가 죽었던 일이 있는데,
 DB 이름    withcenter-cyborg
 CLI 별칭   myspace
 버전       SpacetimeDB 2.7.1
+월드 틱    30 Hz — 서버 `MONSTER_AI_MICROS` 와 클라 `_fastInterval` 을 **함께** 맞춘다
 SSH        ssh root@167.88.45.173
 ```
 

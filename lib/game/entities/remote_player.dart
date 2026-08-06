@@ -92,11 +92,11 @@ class RemotePlayerEntity extends IsoEntity with TapCallbacks {
 
   DateTime? _lastServerAt;
 
-  /// 위치 보고 주기(1/24 초 = 24 Hz)를 기본값으로 삼는다.
+  /// 위치 보고 주기(1/30 초 = 30 Hz)를 기본값으로 삼는다.
   ///
   /// 첫 갱신 한 번을 받기 전까지만 쓰이는 값이다. 그 뒤로는 [_tickEstimate] 가
   /// 실측으로 덮으므로, 서버 주기가 바뀌어도 여기를 고치지 않아 어긋날 일은 없다.
-  static const double _defaultSegment = 1 / 24;
+  static const double _defaultSegment = 1 / 30;
 
   /// 구간 길이에 곱하는 여유. [Enemy] 와 같은 이유로 1 보다 커야 한다 —
   /// 배정 시간이 실측 간격과 같으면 갱신이 늦을 때마다 도착해 **멈춘다.**
