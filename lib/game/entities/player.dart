@@ -13,6 +13,7 @@ import '../systems/buff.dart';
 import '../systems/inventory.dart';
 import '../systems/level_system.dart';
 import '../systems/rest_recovery.dart';
+import '../art/cyborg_artist.dart';
 import 'cyborg_design.dart';
 import 'cyborg_renderer.dart';
 import 'enemy.dart';
@@ -1203,6 +1204,12 @@ class Player extends IsoEntity with Damageable {
     _renderYaw += delta.clamp(-maxStep, maxStep);
   }
 
+  /// 이 몸을 그리는 손그림 액터.
+  ///
+  /// 매 프레임 새로 만들면 그 할당이 그대로 프레임 비용이 된다. 포즈는
+  /// 필드로 갱신하고 인스턴스는 하나만 유지한다.
+  late final CyborgArtist _artist = CyborgArtist(design);
+
   /// 본체를 그린다.
   ///
   /// [yaw]를 주면 그 각도로, 없으면 보간된 [_renderYaw]로 그린다. 대시 잔상은
@@ -1215,13 +1222,17 @@ class Player extends IsoEntity with Damageable {
         ? math.sin(cycle * 2) * 2.0 * design.bobScale
         : math.sin(_animTime * 2) * 1.2;
 
-    CyborgRenderer.drawBody(
+    // 손그림 액터([CyborgArtist])로 그린다. 초상·프리뷰·원격 플레이어가 모두
+    // 같은 `paint` 를 거치므로 어느 화면에서도 같은 인물이 나온다.
+    _artist
+      ..yaw = yaw ?? _renderYaw
+      ..swing = swing
+      ..armSwing = running ? -swing * 0.9 : 0
+      ..bob = -bob;
+    paintCyborgAtFeet(
       canvas,
-      design: design,
-      yaw: yaw ?? _renderYaw,
-      baseY: -bob,
-      swing: swing,
-      armSwing: running ? -swing * 6 : 0,
+      _artist,
+      height: design.totalHeight,
       time: _animTime,
     );
   }

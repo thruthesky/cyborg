@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../game/art/cyborg_artist.dart';
 import '../game/entities/cyborg_design.dart';
 import '../game/entities/cyborg_renderer.dart';
 import '../game/palette.dart';
@@ -90,6 +91,10 @@ class _PortraitPainter extends CustomPainter {
   /// 초 단위 경과 시간. 숨쉬기 위상에만 쓴다.
   final double time;
 
+  /// 게임 안의 몸과 **같은** 액터. 이 공유가 끊기면 명부에서 고른 인물과
+  /// 맵에서 걷는 인물이 갈린다.
+  late final CyborgArtist _artist = CyborgArtist(design);
+
   @override
   void paint(Canvas canvas, Size size) {
     // 렌더러의 원점은 발밑이고 위로 갈수록 y 가 음수다. 키에 여백을 조금 붙여
@@ -121,11 +126,19 @@ class _PortraitPainter extends CustomPainter {
     // `time` 을 넘겨야 코어가 맥동한다. 넘기지 않으면 게임 안에서는 뛰는
     // 심장이 선택 화면에서만 멎어 있다. `baseY` 부호도 게임과 같게 —
     // 위로 뜨는 것이 들숨이다(y 는 위로 갈수록 음수).
-    CyborgRenderer.drawBody(
+    _artist
+      ..yaw = 0
+      ..swing = 0
+      ..armSwing = 0
+      ..bob = -breath;
+    // 초상은 정지 화면이고 크게 그려진다. 여기서만 디테일을 끝까지 올린다 —
+    // 사람이 캐릭터를 고르는 유일한 순간이다.
+    paintCyborgAtFeet(
       canvas,
-      design: design,
-      baseY: -breath,
+      _artist,
+      height: design.totalHeight,
       time: time,
+      detail: 1.0,
     );
 
     if (!selected) canvas.restore();

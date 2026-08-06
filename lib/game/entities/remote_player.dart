@@ -10,7 +10,7 @@ import '../iso.dart';
 import '../net/world_presence.dart';
 import '../palette.dart';
 import 'cyborg_design.dart';
-import 'cyborg_renderer.dart';
+import '../art/cyborg_artist.dart';
 import 'iso_entity.dart';
 import 'projectile.dart';
 
@@ -68,6 +68,9 @@ class RemotePlayerEntity extends IsoEntity with TapCallbacks {
 
   /// 이 몸이 쓰는 신체 프레임. 내 캐릭터와 같은 렌더러로 그린다.
   final CyborgDesign design;
+
+  /// 이 몸을 그리는 손그림 액터. 인스턴스는 하나만 유지한다.
+  late final CyborgArtist _artist = CyborgArtist(design);
 
   /// 이번 보간 구간의 시작점 — 갱신이 올 때의 **화면 위치**다.
   ///
@@ -432,21 +435,28 @@ class RemotePlayerEntity extends IsoEntity with TapCallbacks {
     final swingProgress = isSwinging ? 1 - _swingTimer / _swingDuration : 0.0;
     final attackArm = isSwinging ? _attackArmSwing(swingProgress) : null;
 
-    CyborgRenderer.drawBody(
-      canvas,
-      design: design,
-      yaw: _renderYaw,
-      baseY: -bob,
-      swing: swing,
+    // 남의 몸도 내 몸과 **같은 액터**로 그린다. 렌더러가 갈리면 같은 캐릭터를
+    // 골라도 내 화면과 남의 화면에서 다른 사람이 걸어 다닌다.
+    _artist
+      ..yaw = _renderYaw
+      ..swing = swing
       // 등에 멘 칼은 늘 보인다. 내 몸과 같은 모습이어야 한다.
       //
       // 한때 이 값을 `isSwinging` 으로 두었는데, 그것은 오해였다 — 이 플래그는
       // **등에 멘** 칼을 그리는 것이지 휘두르는 칼날이 아니다. 그래서 휘두를
       // 때만 등에 칼이 나타났다 사라지는 반대 동작이 되었고, 정작 칼을 휘두르는
       // 모습은 한 번도 그려지지 않았다.
-      showBlade: true,
-      armSwing: attackArm ?? (_moving ? -swing * 6 : 0),
+      ..showBlade = true
+      ..armSwing = attackArm ?? (_moving ? -swing * 0.9 : 0)
+      ..bob = -bob;
+    paintCyborgAtFeet(
+      canvas,
+      _artist,
+      height: design.totalHeight,
       time: _animTime,
+      // 남들은 대체로 멀리 있다. 보이지도 않는 미세 텍스처에 인원수만큼
+      // 비용을 곱하지 않는다.
+      detail: 0.4,
     );
 
     if (isSwinging) _renderBladeSwing(canvas, swingProgress);

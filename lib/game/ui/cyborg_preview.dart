@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
+import '../art/cyborg_artist.dart';
 import '../entities/cyborg_design.dart';
 import '../entities/cyborg_renderer.dart';
 import '../palette.dart';
@@ -21,6 +22,7 @@ class CyborgPreviewPainter extends CustomPainter {
   });
 
   final CyborgDesign design;
+
 
   /// 애니메이션 경과 시간(초).
   final double time;
@@ -50,14 +52,19 @@ class CyborgPreviewPainter extends CustomPainter {
         ? _sin(cycle * 2) * 2.0 * design.bobScale
         : _sin(time * 2) * 1.2;
 
-    CyborgRenderer.drawBody(
+    // 이 페인터는 `const` 생성자라 액터를 필드로 들 수 없다. 프리뷰는 화면에
+    // 한 몸뿐이므로 여기서 만든다 — 게임처럼 수십 개가 도는 자리가 아니다.
+    final artist = CyborgArtist(design)
+      ..yaw = showBack ? math.pi : 0
+      ..swing = swing
+      ..armSwing = walking ? -swing * 0.9 : 0.0
+      ..bob = -bob;
+    paintCyborgAtFeet(
       canvas,
-      design: design,
-      baseY: -bob,
-      swing: swing,
-      yaw: showBack ? math.pi : 0,
-      armSwing: walking ? -swing * 6 : 0.0,
+      artist,
+      height: design.totalHeight,
       time: time,
+      detail: 1.0,
     );
 
     canvas.restore();

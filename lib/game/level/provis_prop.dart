@@ -159,8 +159,8 @@ class ProvisPropComponent extends IsoEntity {
         ),
       ProvisPropKind.ridge => MoundProp(
           seed: spec.seed,
-          radius: r.range(95, 150),
-          rise: r.range(20, 34),
+          radius: r.range(68, 108),
+          rise: r.range(16, 26),
           // 지면과 평행한 면이 격자와 어긋나면 기물이 공중에 뜬 것처럼 보인다.
           isoRatio: ProvisBridge.iso.elevationSin,
           // 밟고 지나갈 수 있어야 한다. 통행은 LevelMap 만 정하므로,
