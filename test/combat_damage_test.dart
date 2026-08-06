@@ -125,10 +125,12 @@ void main() {
       expect(healers, {...grades.keys, PickupKind.combatStim});
     });
 
-    test('어느 등급도 1레벨 최대 체력의 10%를 넘지 못한다', () {
+    test('어느 등급도 1레벨 최대 체력의 40%를 넘지 못한다', () {
       // 물약 한 병으로 판세가 뒤집히지 않아야 한다.
+      // 체력 풀을 두 차례 절반으로 낮추면서 최상급 물약의 몫이
+      // 10% → 20% → 40% 로 올라갔다. 회복량 자체는 손대지 않았다.
       for (final heal in grades.values) {
-        expect(heal / Player.baseMaxHp, lessThanOrEqualTo(0.1));
+        expect(heal / Player.baseMaxHp, lessThanOrEqualTo(0.4));
       }
     });
 
@@ -164,6 +166,9 @@ void main() {
   });
 
   group('체력 성장', () {
+    // 체력은 이제 서버가 정한다(`world.rs` 의 `BASE_MAX_HP`·`HP_PER_LEVEL`).
+    // 여기서 지키는 것은 성장의 **모양**이고, 서버와 같은 값인지는
+    // `test/server_authority_contract_test.dart` 가 따로 지킨다.
     test('레벨업 한 번에 최대 체력이 1,000 늘어난다', () {
       // 강화 구간(5의 배수)이라고 더 주지 않는다.
       for (var level = 2; level <= 200; level++) {

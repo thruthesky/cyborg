@@ -331,11 +331,22 @@ class GameAudio {
   static bool _ready = false;
   static MusicTrack? _currentTrack;
 
+  static double _sfxVolume = 0.85;
+  static double _musicVolume = 0.5;
+
   /// 효과음 전체 볼륨(0~1).
-  static double sfxVolume = 0.85;
+  ///
+  /// 범위 밖의 값이 그대로 재생에 들어가면 플랫폼에 따라 예외가 나거나 소리가
+  /// 찢어지므로, 넣는 길([setSfxVolume])을 하나로 두고 거기서 잘라 낸다.
+  static double get sfxVolume => _sfxVolume;
 
   /// 배경음·징글 전체 볼륨(0~1).
-  static double musicVolume = 0.5;
+  static double get musicVolume => _musicVolume;
+
+  /// 효과음 볼륨을 바꾼다. 다음에 나는 소리부터 적용된다.
+  static void setSfxVolume(double value) {
+    _sfxVolume = value.clamp(0.0, 1.0);
+  }
 
   /// 오디오 시스템이 사용할 준비가 되었는지 여부.
   static bool get isReady => _ready;
@@ -549,7 +560,7 @@ class GameAudio {
 
   /// 배경음 볼륨을 바꾸고 재생 중인 트랙에도 즉시 반영한다.
   static Future<void> setMusicVolume(double value) async {
-    musicVolume = value.clamp(0.0, 1.0);
+    _musicVolume = value.clamp(0.0, 1.0);
     final track = _currentTrack;
     if (track != null && _bgmStarted) {
       await _guard(

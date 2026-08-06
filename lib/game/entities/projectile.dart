@@ -24,6 +24,7 @@ class Projectile extends IsoEntity {
     this.maxLifetime = 2.2,
     this.radius = 0.18,
     this.homing = 0,
+    this.color,
   })  : direction = direction.normalized(),
         super(grid: grid, z: z, bodyRadius: 0.18, depthBias: 0.5);
 
@@ -37,12 +38,21 @@ class Projectile extends IsoEntity {
   /// 0보다 크면 플레이어 방향으로 서서히 유도된다(초당 회전 강도).
   final double homing;
 
+  /// 탄체의 색. 비우면 진영 기본색을 쓴다.
+  ///
+  /// 플레이어의 볼트는 무기 등급의 색으로 나간다. 적의 탄은 진영색 하나로
+  /// 묶여 있어야 하므로 넘기지 않는다 — 적탄 색이 개체마다 다르면 "마젠타가
+  /// 날아오면 피한다"는 즉각적인 판단이 무너진다.
+  final Color? color;
+
   double _life = 0;
   final List<Vector2> _trail = [];
 
-  Color get _color => owner == ProjectileOwner.player
-      ? GamePalette.playerAccent
-      : GamePalette.robotEnergy;
+  Color get _color =>
+      color ??
+      (owner == ProjectileOwner.player
+          ? GamePalette.playerAccent
+          : GamePalette.robotEnergy);
 
   @override
   void update(double dt) {

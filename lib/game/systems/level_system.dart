@@ -76,6 +76,14 @@ class LevelSystem {
   /// 20레벨 부근에서 성장이 사실상 멈춘다.
   static const double _minFalloff = 0.55;
 
+  /// 처치 보상에 곱하는 배율. 사냥 한 번의 체감을 조절하는 유일한 손잡이다.
+  ///
+  /// 곡선([xpToNext])은 서버 `leaderboard.rs` 와 맞춰 둔 값이라 건드리면
+  /// 양쪽이 어긋난다. 그래서 "사냥이 너무 더디다" 는 여기서만 푼다 —
+  /// 이 배율은 클라이언트가 지급 시점에 곱할 뿐이고, 서버로는 이미 곱해진
+  /// 누적 경험치만 올라가므로 곡선과 달리 한쪽만 고쳐도 안전하다.
+  static const double killXpMultiplier = 3.0;
+
   /// [level]에서 다음 레벨까지 필요한 경험치.
   ///
   /// 레벨 1은 60, 10은 573, 70은 16,413. 71부터 가속이 붙어 100은 54,633,
@@ -148,7 +156,8 @@ class LevelSystem {
       // 1레벨 내구도 10,000에서 레벨마다 정확히 1,000씩 늘어난다.
       // 강화 구간이라고 더 주지 않는다 — "레벨업 한 번에 +1,000" 이라는
       // 규칙이 플레이어에게 그대로 읽히는 편이 낫다.
-      // 레벨 N의 최대 체력 = 10,000 + (N-1) × 1,000.
+      // 레벨 N의 최대 체력 = 10,000 + (N-1) × 1,000. 서버의 `HP_PER_LEVEL`
+      // 과 같은 값이어야 한다.
       maxHp: 1000,
       maxEnergy: milestone ? 14 : 8,
       // 마력도 체력과 같은 자릿수로 굴러간다. 만렙 30에서 최대 마력은
@@ -171,11 +180,12 @@ class LevelSystem {
   /// [playerLevel]인 플레이어가 [value] 가치의 적을 처치했을 때 실제로 얻는 경험치.
   ///
   /// 레벨이 오를수록 같은 적의 가치는 떨어지지만 [_minFalloff] 아래로는 내려가지 않는다.
+  /// 그렇게 깎인 값에 [killXpMultiplier]를 곱한 것이 최종 지급량이다.
   static int killXp(int value, {required int playerLevel}) {
     final falloff = math.max(
       _minFalloff,
       math.pow(0.97, math.max(0, playerLevel - 1)).toDouble(),
     );
-    return math.max(1, (value * falloff).round());
+    return math.max(1, (value * falloff * killXpMultiplier).round());
   }
 }

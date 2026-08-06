@@ -76,12 +76,14 @@ class ActionButton extends PositionComponent
 
   @override
   void onDragStart(DragStartEvent event) {
+    super.onDragStart(event);
     event.handled = true;
     _trigger();
   }
 
   @override
   void onDragEnd(DragEndEvent event) {
+    super.onDragEnd(event);
     _held = false;
   }
 
@@ -246,9 +248,14 @@ class ActionButton extends PositionComponent
 }
 
 /// 반투명한 원형 조이스틱 배경을 그리는 컴포넌트.
+///
+/// 앵커를 건드리지 않는다. `JoystickComponent` 는 배경을 위치 `(0, 0)` 인
+/// 자식으로 그대로 붙이고 앵커는 손대지 않으므로(손잡이만 중앙으로 맞춘다),
+/// 여기서 `Anchor.center` 를 주면 원이 조이스틱 사각형의 **좌상단 모서리**를
+/// 중심으로 그려진다 — 화면 왼쪽으로 반이 잘려 나가고, 손잡이와 실제 드래그
+/// 영역만 제자리에 남아 조이스틱이 고장 난 것처럼 보인다.
 class JoystickBase extends PositionComponent {
-  JoystickBase({required this.radius})
-      : super(size: Vector2.all(radius * 2), anchor: Anchor.center);
+  JoystickBase({required this.radius}) : super(size: Vector2.all(radius * 2));
 
   final double radius;
 
