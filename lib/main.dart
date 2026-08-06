@@ -7,6 +7,7 @@ import 'auth/cyborg_session.dart';
 import 'dev/dev_login.dart';
 import 'game/action_rpg_game.dart';
 import 'game/net/spacetime_game_sync.dart';
+import 'game/net/spacetime_world_presence.dart';
 import 'game/palette.dart';
 import 'spacetime/generated/player_character.dart';
 import 'spacetime/spacetime_leaderboard.dart';
@@ -87,6 +88,9 @@ class _GameScreenState extends State<GameScreen> {
           ? null
           : SpacetimeGameSync(client, startTotalXp: startTotalXp),
       leaderboard: client == null ? null : SpacetimeLeaderboard(client),
+      // 같은 월드를 공유하는 다른 요원을 주고받는 통로. 이것이 없으면 서버가
+      // 남들의 좌표를 갖고 있어도 내 화면에는 아무도 나타나지 않는다.
+      presence: client == null ? null : SpacetimeWorldPresence(client),
       startTotalXp: startTotalXp,
       design: kind.design,
       // 앱이 스스로 로그인하고 캐릭터까지 골라 들어왔다면 시작 메뉴에서
@@ -204,6 +208,8 @@ class _ControlsCard extends StatelessWidget {
     ('대시', 'Shift  ·  L'),
     ('인벤토리', 'I  ·  Tab'),
     ('포션 사용', 'Q  ·  1~6'),
+    ('월드 지도', 'M'),
+    ('소리 설정', 'O  ·  음소거 V'),
     ('일시정지', 'ESC  ·  P'),
   ];
 

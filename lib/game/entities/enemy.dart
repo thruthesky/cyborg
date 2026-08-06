@@ -8,6 +8,8 @@ import '../fx/damage_text.dart';
 import '../fx/explosion.dart';
 import '../iso.dart';
 import '../palette.dart';
+import '../systems/elite.dart';
+import '../systems/enemy_tactics.dart';
 import '../systems/level_system.dart';
 import '../systems/monster_codex.dart';
 import '../systems/monster_population.dart';
@@ -28,8 +30,11 @@ class Enemy extends IsoEntity with Damageable {
     required this.species,
     required Vector2 grid,
     double hpMultiplier = 1.0,
+    this.elite,
   })  : stats = species.stats,
-        _hpScale = hpMultiplier,
+        // 정예의 체력 배율을 개체 편차와 같은 축에 실어 둔다. 경험치가 이
+        // 배율에서 나오므로([xpValue]), 질긴 만큼 값어치도 따라 오른다.
+        _hpScale = hpMultiplier * (elite?.hpScale ?? 1.0),
         super(
           grid: grid,
           bodyRadius: species.stats.bodyRadius,
@@ -38,6 +43,11 @@ class Enemy extends IsoEntity with Damageable {
     _maxHp = stats.maxHp * _hpScale;
     _hp = _maxHp;
   }
+
+  /// 이 개체가 정예라면 그 변종. 평범한 개체는 null 이다.
+  final EliteTrait? elite;
+
+  bool get isElite => elite != null;
 
   /// 이 개체가 속한 종. 레벨·이름·도색·수치가 모두 여기서 온다.
   final MonsterSpecies species;
@@ -106,6 +116,20 @@ class Enemy extends IsoEntity with Damageable {
   /// 추격을 포기하는 거리. 어그로 경계에서 상태가 떨리지 않도록 여유를 둔다.
   double get _releaseRange => aggroRange + metersToTiles(kAggroReleaseMargin);
 
+  /// 이 개체의 실제 이동 속도. 정예는 여기서 갈린다.
+  double get _speed => stats.speed * (elite?.speedScale ?? 1.0);
+
+  /// 공격 예비 동작 시간. 짧을수록 회피할 창이 좁다.
+  ///
+  /// 경고 표시와 팔 동작이 모두 이 값을 기준으로 그려지므로, 정예의 짧아진
+  /// 예비 동작이 화면에도 그대로 보인다.
+  double get _telegraphTime =>
+      stats.telegraphTime * (elite?.telegraphScale ?? 1.0);
+
+  /// 플레이어를 발견했을 때 함께 깨우는 동료의 반경(타일).
+  double get _alertRadius =>
+      elite?.alertRadiusTiles ?? EliteTrait.baseAlertRadiusTiles;
+
   /// 지금 플레이어를 노릴 수 있는지 여부.
   ///
   /// 안전지대 안으로 들어간 플레이어에게는 손을 댈 수 없다.
@@ -157,9 +181,7 @@ class Enemy extends IsoEntity with Damageable {
       case EnemyPhase.idle:
         _wander(dt);
         if (_canTargetPlayer && distance <= aggroRange) {
-          phase = EnemyPhase.chase;
-          // 플레이어를 포착한 순간의 센서 경보음.
-          GameAudio.play(Sfx.robotAlert, at: grid);
+          _spotPlayer();
         }
       case EnemyPhase.chase:
         // 어그로가 풀리는 조건: 대상 사망, 안전지대 진입, 추격 한계 이탈.
@@ -168,14 +190,28 @@ class Enemy extends IsoEntity with Damageable {
           return;
         }
         if (distance > 0.01) facing.setFrom(toPlayer.normalized());
-        if (distance <= stats.attackRange) {
+        // 사거리 안이라도 원거리 기종이 코앞이면 먼저 물러난다. 붙어서 쏘는
+        // 포격 기체는 근접 무기의 밥이고, 그것이 이 계통의 약점이어야 한다.
+        final tooClose =
+            stats.ranged && distance < stats.attackRange * EnemyTactics.kiteRatio;
+        if (distance <= stats.attackRange && !tooClose) {
           phase = EnemyPhase.telegraph;
-          _phaseTimer = stats.telegraphTime;
+          _phaseTimer = _telegraphTime;
           _burstShotsLeft = _burstCount;
           // 공격 예비 동작을 소리로도 알려 회피할 틈을 준다.
           GameAudio.play(Sfx.robotCharge, at: grid);
         } else {
-          _moveToward(toPlayer.normalized(), stats.speed, dt);
+          _moveToward(
+            EnemyTactics.chaseDirection(
+              build: build,
+              ranged: stats.ranged,
+              toPlayer: toPlayer,
+              attackRange: stats.attackRange,
+              swayPhase: _animTime * 0.9 + _phaseOffset,
+            ),
+            _speed,
+            dt,
+          );
         }
       case EnemyPhase.telegraph:
         // 예비 동작 중에 대상이 안전지대로 피하면 공격을 거둔다.
@@ -207,11 +243,46 @@ class Enemy extends IsoEntity with Damageable {
           _phaseTimer = stats.recoverTime;
         }
       case EnemyPhase.recover:
+        // 때린 자리에 못 박혀 서 있지 않는다. 근접은 놓치지 않으려 파고들고,
+        // 원거리는 거리를 벌린다 — 이 한 구간이 "치고 빠진다" 는 모양을 만든다.
+        final step = EnemyTactics.recoverDirection(
+          ranged: stats.ranged,
+          toPlayer: toPlayer,
+          attackRange: stats.attackRange,
+        );
+        if (step != null && _canTargetPlayer) {
+          _moveToward(step, _speed * EnemyTactics.recoverSpeedScale, dt);
+        }
         if (_phaseTimer <= 0) {
           phase = EnemyPhase.chase;
         }
       case EnemyPhase.dead:
         break;
+    }
+  }
+
+  /// 플레이어를 발견했다. 추격에 들어가면서 곁의 동료를 함께 깨운다.
+  ///
+  /// 한 마리를 건드리면 한 마리만 오는 월드에서는, 로봇 군단이 아니라 과녁을
+  /// 상대하는 기분이 된다. 경보를 들은 동료가 함께 달려들어야 "적진" 이 된다.
+  /// 깨우는 것은 **어그로 상태뿐**이고 피해나 사거리는 건드리지 않는다.
+  void _spotPlayer() {
+    phase = EnemyPhase.chase;
+    // 플레이어를 포착한 순간의 센서 경보음.
+    GameAudio.play(Sfx.robotAlert, at: grid);
+    _alertNearby();
+  }
+
+  void _alertNearby() {
+    final radiusSquared = _alertRadius * _alertRadius;
+    for (final other in game.enemies) {
+      if (identical(other, this) || !other.isAlive) continue;
+      // 이미 싸우고 있는 동료에게 다시 소리칠 필요는 없다.
+      if (other.phase != EnemyPhase.idle) continue;
+      if ((other.grid - grid).length2 > radiusSquared) continue;
+      // 경보를 듣고 달려드는 것이지 스스로 본 것이 아니므로, 여기서 또 소리를
+      // 지르게 하지 않는다. 그러지 않으면 한 번의 발견이 월드를 타고 번진다.
+      other.phase = EnemyPhase.chase;
     }
   }
 
@@ -240,7 +311,7 @@ class Enemy extends IsoEntity with Damageable {
     if (toTarget.length2 < 0.05) return;
     final dir = toTarget.normalized();
     facing.setFrom(dir);
-    _moveToward(dir, stats.speed * 0.4, dt);
+    _moveToward(dir, _speed * 0.4, dt);
   }
 
   /// 벽을 피하고 다른 적과 겹치지 않도록 이동한다.
@@ -341,7 +412,7 @@ class Enemy extends IsoEntity with Damageable {
     _healthBarTimer = 2.5;
     GameAudio.play(Sfx.robotHit, at: grid);
 
-    // 무거운 유닛일수록 넉백에 강하다.
+    // 무거운 유닛일수록 넉백에 강하다. 정예의 장갑은 그 위에 한 겹 더 얹힌다.
     if (knockback != null) {
       final resistance = switch (build) {
         MonsterBuild.drone => 1.4,
@@ -349,7 +420,7 @@ class Enemy extends IsoEntity with Damageable {
         MonsterBuild.siege => 0.45,
         MonsterBuild.sovereign => 0.12,
       };
-      _knockback.add(knockback * resistance);
+      _knockback.add(knockback * resistance * (elite?.knockbackScale ?? 1.0));
     }
 
     game.spawnEffect(
@@ -362,8 +433,12 @@ class Enemy extends IsoEntity with Damageable {
       ),
     );
 
-    // 피격 시 추격 상태로 전환한다.
-    if (phase == EnemyPhase.idle) phase = EnemyPhase.chase;
+    // 피격 시 추격 상태로 전환한다. 뒤에서 한 대 맞은 것도 발견이므로 동료도
+    // 함께 깨어난다 — 사거리 밖에서 하나씩 저격해 무리를 지우는 길을 막는다.
+    if (phase == EnemyPhase.idle) {
+      phase = EnemyPhase.chase;
+      _alertNearby();
+    }
 
     if (_hp <= 0) _die();
   }
@@ -407,6 +482,10 @@ class Enemy extends IsoEntity with Damageable {
     _drawTierCrest(canvas);
     canvas.restore();
 
+    // 정예의 발밑 고리. 본체보다 아래에 깔아 실루엣을 가리지 않으면서도,
+    // 멀리서 한눈에 "저건 다르다" 가 읽혀야 한다.
+    if (isElite) _drawEliteAura(canvas, s);
+
     canvas.save();
     canvas.scale(s);
     if (!facesRight(facing)) canvas.scale(-1, 1);
@@ -429,12 +508,58 @@ class Enemy extends IsoEntity with Damageable {
     if (_showNameTag) _renderNameTag(canvas);
   }
 
+  /// 정예를 알리는 발밑 고리.
+  ///
+  /// 맥동하는 두 겹의 타원과 네 방향의 짧은 눈금으로, 등급 문양(겹고리)과는
+  /// 다른 모양을 만든다. 둘이 닮으면 "높은 등급" 과 "정예" 를 구분할 수 없다.
+  void _drawEliteAura(Canvas canvas, double scale) {
+    final trait = elite!;
+    final pulse = 0.5 + 0.5 * math.sin(_animTime * 2.6 + _phaseOffset);
+    final radiusX = (34.0 + pulse * 4) * scale;
+    final radiusY = radiusX * 0.5;
+    final rect = Rect.fromCenter(
+      center: Offset.zero,
+      width: radiusX * 2,
+      height: radiusY * 2,
+    );
+
+    canvas.drawOval(
+      rect,
+      Paint()
+        ..color = trait.color.withValues(alpha: 0.16 + pulse * 0.10)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
+    );
+    canvas.drawOval(
+      rect,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2
+        ..color = trait.color.withValues(alpha: 0.85),
+    );
+
+    // 네 방향 눈금.
+    final tick = Paint()
+      ..color = trait.color.withValues(alpha: 0.9)
+      ..strokeWidth = 2
+      ..strokeCap = StrokeCap.round;
+    for (var i = 0; i < 4; i++) {
+      final angle = math.pi / 2 * i + _animTime * 0.6;
+      final dx = math.cos(angle);
+      final dy = math.sin(angle);
+      canvas.drawLine(
+        Offset(dx * radiusX, dy * radiusY),
+        Offset(dx * (radiusX + 6 * scale), dy * (radiusY + 3 * scale)),
+        tick,
+      );
+    }
+  }
+
   /// 이름표를 띄울지 여부.
   ///
-  /// 지휘급은 언제나, 나머지는 가까이 있거나 방금 맞았을 때만 보여 준다.
+  /// 지휘급과 정예는 언제나, 나머지는 가까이 있거나 방금 맞았을 때만 보여 준다.
   /// 200종이 한꺼번에 이름을 달고 있으면 화면이 글자로 뒤덮인다.
   bool get _showNameTag {
-    if (isBoss || _healthBarTimer > 0) return true;
+    if (isBoss || isElite || _healthBarTimer > 0) return true;
     return (grid - game.player.grid).length2 <= _nameTagRangeSquared;
   }
 
@@ -631,7 +756,7 @@ class Enemy extends IsoEntity with Damageable {
 
     // 팔(공격 모션에 따라 들어올림)
     final armLift = switch (phase) {
-      EnemyPhase.telegraph => -14.0 * (1 - _phaseTimer / stats.telegraphTime),
+      EnemyPhase.telegraph => -14.0 * (1 - _phaseTimer / _telegraphTime),
       EnemyPhase.strike => -16.0,
       EnemyPhase.recover => -6.0,
       _ => math.sin(cycle) * 3,
@@ -740,7 +865,7 @@ class Enemy extends IsoEntity with Damageable {
     );
     if (charging) {
       final charge = phase == EnemyPhase.telegraph
-          ? 1 - (_phaseTimer / stats.telegraphTime)
+          ? 1 - (_phaseTimer / _telegraphTime)
           : 1.0;
       canvas.drawCircle(
         Offset(50, baseY - 76),
@@ -831,19 +956,36 @@ class Enemy extends IsoEntity with Damageable {
     final playerLevel = game.player.level;
     var painter = _nameTagPainter;
     if (painter == null || _nameTagForLevel != playerLevel) {
+      // 밝은 바닥 위에서도 글자가 뜨도록 흰 테두리를 깐다.
+      const glow = [
+        Shadow(color: Colors.white, blurRadius: 4),
+        Shadow(color: Colors.white, blurRadius: 8),
+      ];
+      final trait = elite;
       painter = TextPainter(
         text: TextSpan(
-          text: 'Lv.${species.level}  ${species.name}',
+          children: [
+            // 변종 이름은 제 색으로 앞에 선다. 발밑 고리와 같은 색이라, 멀리서
+            // 본 고리와 가까이서 읽은 이름이 같은 것을 가리킨다.
+            if (trait != null)
+              TextSpan(
+                text: '${trait.label} ',
+                style: TextStyle(
+                  color: trait.color,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w900,
+                  height: 1,
+                  shadows: glow,
+                ),
+              ),
+            TextSpan(text: 'Lv.${species.level}  ${species.name}'),
+          ],
           style: TextStyle(
             color: _threatColor(stats.damage, game.player.maxHp),
             fontSize: 11,
             fontWeight: FontWeight.w800,
             height: 1,
-            // 밝은 바닥 위에서도 글자가 뜨도록 흰 테두리를 깐다.
-            shadows: const [
-              Shadow(color: Colors.white, blurRadius: 4),
-              Shadow(color: Colors.white, blurRadius: 8),
-            ],
+            shadows: glow,
           ),
         ),
         textDirection: TextDirection.ltr,
@@ -916,7 +1058,7 @@ class Enemy extends IsoEntity with Damageable {
   /// 공격 예비 동작을 알리는 지면 경고 표시.
   void _renderTelegraph(Canvas canvas) {
     final progress =
-        (1 - (_phaseTimer / stats.telegraphTime)).clamp(0.0, 1.0).toDouble();
+        (1 - (_phaseTimer / _telegraphTime)).clamp(0.0, 1.0).toDouble();
     final alpha = 0.25 + progress * 0.45;
 
     if (stats.ranged) {

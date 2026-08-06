@@ -329,11 +329,21 @@ class GameAudio {
   static bool _ready = false;
   static MusicTrack? _currentTrack;
 
+  /// [_currentTrack] 이 실제로 소리를 내기 시작했는지.
+  ///
+  /// 음소거 중에 고른 트랙은 "정해졌지만 한 번도 흐른 적 없는" 상태로 남는다.
+  /// 그 트랙에 `resume` 을 걸면 이어 붙일 소리가 없어 영영 조용하므로, 처음부터
+  /// 틀어야 하는지 이어 틀어야 하는지를 이 값으로 가른다.
+  static bool _musicStarted = false;
+
+  static double _sfxVolume = 0.85;
+  static double _musicVolume = 0.5;
+
   /// 효과음 전체 볼륨(0~1).
-  static double sfxVolume = 0.85;
+  static double get sfxVolume => _sfxVolume;
 
   /// 배경음·징글 전체 볼륨(0~1).
-  static double musicVolume = 0.5;
+  static double get musicVolume => _musicVolume;
 
   /// 오디오 시스템이 사용할 준비가 되었는지 여부.
   static bool get isReady => _ready;
@@ -358,8 +368,18 @@ class GameAudio {
     if (_muted == value) return;
     _muted = value;
     // 재생 중인 트랙이 없을 때 bgm 을 건드리면 플랫폼에 따라 예외가 난다.
-    if (_currentTrack == null) return;
-    unawaited(_guard(value ? FlameAudio.bgm.pause() : FlameAudio.bgm.resume()));
+    final track = _currentTrack;
+    if (track == null) return;
+    if (value) {
+      unawaited(_guard(FlameAudio.bgm.pause()));
+    } else if (_musicStarted) {
+      unawaited(_guard(FlameAudio.bgm.resume()));
+    } else {
+      // 음소거인 채로 정해 둔 트랙이다. 이어 붙일 소리가 없으므로 지금 처음부터
+      // 튼다 — 같은 트랙이면 [playMusic] 이 그냥 돌아가므로 표시를 먼저 지운다.
+      _currentTrack = null;
+      unawaited(playMusic(track));
+    }
   }
 
   /// 오디오 실패가 게임 로직으로 번지지 않도록 삼킨다.
@@ -451,12 +471,15 @@ class GameAudio {
   static Future<void> playMusic([MusicTrack track = defaultTrack]) async {
     if (!_ready || _currentTrack == track) return;
     _currentTrack = track;
+    // 음소거 중에는 트랙만 정해 두고 소리는 내지 않는다. 음소거를 풀 때 이
+    // 트랙이 처음부터 흐른다.
     if (_muted) return;
     try {
       await FlameAudio.bgm.play(
         '$_musicDir${_tracks[track]!.file}',
         volume: _trackVolume(track),
       );
+      _musicStarted = true;
     } catch (error) {
       _currentTrack = null;
       debugPrint('배경음악 재생 실패($track): $error');
@@ -467,14 +490,20 @@ class GameAudio {
   static Future<void> stopMusic() async {
     if (_currentTrack == null) return;
     _currentTrack = null;
+    _musicStarted = false;
     await _guard(FlameAudio.bgm.stop());
+  }
+
+  /// 효과음 볼륨을 바꾼다. 다음에 나는 소리부터 적용된다.
+  static void setSfxVolume(double value) {
+    _sfxVolume = value.clamp(0.0, 1.0);
   }
 
   /// 배경음 볼륨을 바꾸고 재생 중인 트랙에도 즉시 반영한다.
   static Future<void> setMusicVolume(double value) async {
-    musicVolume = value.clamp(0.0, 1.0);
+    _musicVolume = value.clamp(0.0, 1.0);
     final track = _currentTrack;
-    if (track != null && !_muted) {
+    if (track != null && _musicStarted && !_muted) {
       await _guard(
         FlameAudio.bgm.audioPlayer.setVolume(_trackVolume(track)),
       );
@@ -483,12 +512,12 @@ class GameAudio {
 
   /// 앱이 백그라운드로 갈 때처럼 전체 오디오를 잠시 멈춘다.
   static Future<void> pauseAll() async {
-    if (_currentTrack != null) await _guard(FlameAudio.bgm.pause());
+    if (_musicStarted) await _guard(FlameAudio.bgm.pause());
   }
 
   /// [pauseAll] 로 멈춘 오디오를 다시 재생한다.
   static Future<void> resumeAll() async {
-    if (_currentTrack != null && !_muted) {
+    if (_musicStarted && !_muted) {
       await _guard(FlameAudio.bgm.resume());
     }
   }

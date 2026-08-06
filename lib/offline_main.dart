@@ -78,6 +78,8 @@ class _OfflineMenu extends StatelessWidget {
     ('인벤토리', 'I  ·  Tab'),
     ('캐릭터 정보', 'C'),
     ('포션 사용', 'Q  ·  1~6'),
+    ('월드 지도', 'M'),
+    ('소리 설정', 'O  ·  음소거 V'),
     ('일시정지', 'ESC  ·  P'),
   ];
 

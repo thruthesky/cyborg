@@ -371,6 +371,17 @@ class MonsterCodex {
     return (1 + eased * (maxLevel - 1)).round().clamp(1, maxLevel);
   }
 
+  /// [regionLevel]의 역함수 — 위험 등급 [level]이 시작되는 거리(타일).
+  ///
+  /// 지도에 위험 등급 고리를 그릴 때 쓴다. 곡선의 지수를 UI 쪽에 베껴 두면
+  /// [_regionCurve]를 고치는 순간 지도와 실제 배치가 조용히 어긋나므로,
+  /// 역함수도 곡선을 아는 이 자리에 둔다.
+  static double regionDistanceFor(int level, double halfSpanTiles) {
+    if (halfSpanTiles <= 0) return 0;
+    final eased = (level.clamp(1, maxLevel) - 1) / (maxLevel - 1);
+    return math.pow(eased, 1 / _regionCurve).toDouble() * halfSpanTiles;
+  }
+
   /// 구역 등급 곡선의 지수. 1이면 거리에 정비례한다.
   static const double _regionCurve = 1.6;
 

@@ -131,10 +131,14 @@ class Reducers {
   /// `Pending` (queued to offline storage), or `Dropped` (skipped via
   /// `dropIfOffline: true` while offline).
   Future<TransactionResult> enterWorld({
+    required double gridX,
+    required double gridY,
     List<OptimisticChange>? optimisticChanges,
     bool dropIfOffline = false,
   }) async {
     final encoder = BsatnEncoder();
+    encoder.writeF32(gridX);
+    encoder.writeF32(gridY);
     return await _reducerCaller.call(
       enterWorldDef.name,
       encoder.toBytes(),
@@ -217,12 +221,16 @@ class Reducers {
   Future<TransactionResult> moveTo({
     required double gridX,
     required double gridY,
+    required double facingX,
+    required double facingY,
     List<OptimisticChange>? optimisticChanges,
     bool dropIfOffline = false,
   }) async {
     final encoder = BsatnEncoder();
     encoder.writeF32(gridX);
     encoder.writeF32(gridY);
+    encoder.writeF32(facingX);
+    encoder.writeF32(facingY);
     return await _reducerCaller.call(
       moveToDef.name,
       encoder.toBytes(),
@@ -389,14 +397,14 @@ class Reducers {
   }
 
   StreamSubscription<void> onEnterWorld(
-    void Function(EventContext ctx) callback,
+    void Function(EventContext ctx, double gridX, double gridY) callback,
   ) {
     return _reducerEmitter.on(enterWorldDef).listen((EventContext ctx) {
       final event = ctx.event;
       if (event is! ReducerEvent) return;
       final args = event.reducerArgs;
       if (args is! EnterWorldArgs) return;
-      callback(ctx);
+      callback(ctx, args.gridX, args.gridY);
     });
   }
 
@@ -435,14 +443,21 @@ class Reducers {
   }
 
   StreamSubscription<void> onMoveTo(
-    void Function(EventContext ctx, double gridX, double gridY) callback,
+    void Function(
+      EventContext ctx,
+      double gridX,
+      double gridY,
+      double facingX,
+      double facingY,
+    )
+    callback,
   ) {
     return _reducerEmitter.on(moveToDef).listen((EventContext ctx) {
       final event = ctx.event;
       if (event is! ReducerEvent) return;
       final args = event.reducerArgs;
       if (args is! MoveToArgs) return;
-      callback(ctx, args.gridX, args.gridY);
+      callback(ctx, args.gridX, args.gridY, args.facingX, args.facingY);
     });
   }
 

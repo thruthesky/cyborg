@@ -3,7 +3,9 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 import '../palette.dart';
+import '../systems/weapon.dart';
 import 'cyborg_design.dart';
+import 'weapon_art.dart';
 
 /// [CyborgDesign] 프로필 하나를 캔버스에 그리는 렌더러.
 ///
@@ -54,6 +56,10 @@ abstract final class CyborgRenderer {
   ///
   /// [baseY]는 상하 반동 오프셋, [swing]은 -1~1 범위의 보행 위상,
   /// [armSwing]은 팔 흔들림이다. [showBlade]가 참이면 등에 멘 블레이드를 그린다.
+  ///
+  /// [weapon]을 넘기면 등에 멘 칼과 손의 방출기가 그 등급의 크기·색을 띤다.
+  /// 비우면 가장 낮은 등급으로 그린다 — 캐릭터 선택 화면처럼 아직 레벨이
+  /// 없는 자리에서는 무기 등급을 말할 수 없기 때문이다.
   static void drawBody(
     Canvas canvas, {
     required CyborgDesign design,
@@ -63,7 +69,11 @@ abstract final class CyborgRenderer {
     bool showBlade = true,
     double armSwing = 0,
     double time = 0,
+    Weapon? weapon,
   }) {
+    // 무기를 넘기지 않은 자리(캐릭터 선택 화면 등)는 아직 레벨이 없으므로
+    // 가장 낮은 등급의 블레이드로 그린다.
+    final held = weapon ?? WeaponSystem.forLevel(1);
     final y = _Levels(design, baseY);
     final view = _View(design, yaw);
     // 코어와 발광 부위가 함께 맥동한다. 정지해 있어도 살아 있어 보인다.
@@ -78,12 +88,12 @@ abstract final class CyborgRenderer {
     // 몸통 뒤에 있는 것부터 그린다. 등에 업는 장비는 정면일 때 가려지고
     // 뒤를 보일 때만 드러난다.
     _drawBackRig(canvas, design, y, view, accent);
-    if (showBlade) _drawHolsteredBlade(canvas, design, y, view);
+    if (showBlade) _drawHolsteredWeapon(canvas, design, y, view, held);
 
     // 뒤쪽 팔 → 몸통 → 앞쪽 팔 순서로 그려야 팔이 몸을 올바르게 가린다.
     final arms = _armsByDepth(design, y, view, armSwing);
     for (final arm in arms.where((a) => a.depth <= 0)) {
-      _drawArm(canvas, design, y, view, arm, armor, armorLight);
+      _drawArm(canvas, design, y, view, arm, armor, armorLight, held, pulse);
     }
 
     _drawLegs(canvas, design, y, view, swing, armor, dark, armorLight, pulse);
@@ -93,7 +103,7 @@ abstract final class CyborgRenderer {
     _drawShoulders(canvas, design, y, view, armorLight, accent);
 
     for (final arm in arms.where((a) => a.depth > 0)) {
-      _drawArm(canvas, design, y, view, arm, armor, armorLight);
+      _drawArm(canvas, design, y, view, arm, armor, armorLight, held, pulse);
     }
 
     _drawNeck(canvas, design, y, view, dark);
@@ -553,6 +563,8 @@ abstract final class CyborgRenderer {
     _Limb arm,
     Paint armor,
     Paint armorLight,
+    Weapon weapon,
+    double pulse,
   ) {
     final t = design.armThickness;
     final armTop = y.shoulder + design.shoulderPadSize * 0.3;
@@ -600,10 +612,11 @@ abstract final class CyborgRenderer {
     canvas.drawPath(path, armor);
 
     // 무기를 쥔 손: 팔 끝을 밝게 끊어 실루엣의 마디를 만든다.
+    final hand = Offset(arm.x + lean * 0.8, armTop + armLength * 0.74);
     canvas.drawRRect(
       RRect.fromRectAndRadius(
         Rect.fromCenter(
-          center: Offset(arm.x + lean * 0.8, armTop + armLength * 0.74),
+          center: hand,
           width: t * 1.15,
           height: t * 0.85,
         ),
@@ -611,6 +624,20 @@ abstract final class CyborgRenderer {
       ),
       armorLight,
     );
+
+    // 손에 물린 방출기. 칼날을 뽑지 않아도 등급의 색과 크기가 드러난다.
+    //
+    // 휘두를 때만 등급이 보이면 가만히 서 있는 다른 플레이어의 무기는 알 수
+    // 없다. 상시 발광이라 멀리서도 상대의 대략적인 격이 읽힌다.
+    final emitter = weapon.grade.coreWidth * 0.62;
+    canvas.drawCircle(
+      hand,
+      emitter * 2.1,
+      Paint()
+        ..color = weapon.glow.withValues(alpha: 0.35 * pulse)
+        ..maskFilter = MaskFilter.blur(BlurStyle.normal, emitter * 1.6),
+    );
+    canvas.drawCircle(hand, emitter, Paint()..color = weapon.core);
   }
 
   // ── 머리 ────────────────────────────────────────────────────────────
@@ -825,12 +852,18 @@ abstract final class CyborgRenderer {
 
   // ── 무기 ────────────────────────────────────────────────────────────
 
-  /// 등에 멘 에너지 블레이드. 둘레각 π 부근에 비스듬히 걸려 있다.
-  static void _drawHolsteredBlade(
+  /// 등에 멘 무기. 둘레각 π 부근에 비스듬히 걸려 있다.
+  ///
+  /// 등급이 오르면 길어지고 굵어지며 색이 바뀌고, **계통이 바뀌면 실루엣이
+  /// 통째로 바뀐다**(`WeaponArt.drawHolstered`). 서 있는 다른 요원이 무엇을
+  /// 들고 있는지는 이 그림 하나로 읽힌다 — 휘두를 때만 알 수 있다면 붙기 전에는
+  /// 상대가 어떻게 싸울지 알 방법이 없다.
+  static void _drawHolsteredWeapon(
     Canvas canvas,
     CyborgDesign design,
     _Levels y,
     _View view,
+    Weapon weapon,
   ) {
     final p = view.project(
       math.pi * 0.75,
@@ -842,13 +875,15 @@ abstract final class CyborgRenderer {
     final reveal = (p.depth / (design.shoulderWidth * 0.25)).clamp(0.0, 1.0);
     if (reveal <= 0.01) return;
     final top = y.shoulder + design.shoulderPadSize * 0.5;
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(p.x, top, 3, design.totalHeight * 0.24),
-        const Radius.circular(1.5),
-      ),
-      Paint()
-        ..color = GamePalette.bladeGlow.withValues(alpha: 0.55 * reveal),
+    // 길이는 키에 대한 비율로 잡는다. 무기 길이를 픽셀로 그대로 쓰면 키가
+    // 다른 프레임끼리 칼이 등을 넘어가거나 모자란다.
+    final span = design.totalHeight * 0.24 * (weapon.grade.length / 62);
+    WeaponArt.drawHolstered(
+      canvas,
+      weapon,
+      at: Offset(p.x, top),
+      span: span,
+      reveal: reveal.toDouble(),
     );
   }
 

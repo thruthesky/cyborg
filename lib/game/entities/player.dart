@@ -261,16 +261,26 @@ class Player extends IsoEntity with Damageable {
     _meleeCooldown = _meleeSpan + 0.06;
     _meleeHitApplied = false;
     state = PlayerState.melee;
-    // 콤보 마무리는 더 묵직한 스윙음으로 구분한다. 망치는 매 타가 묵직하다.
+    // 콤보 마무리는 더 묵직한 스윙음으로 구분한다. 무게로 때리는 계통
+    // (해머·드라이버)은 매 타가 묵직하다.
     GameAudio.play(
-      _isFinisher || weaponClass == WeaponClass.maul
+      _isFinisher || weaponClass.heavy
           ? Sfx.bladeSwingHeavy
           : Sfx.bladeSwing,
     );
   }
 
   /// 지금 타가 콤보의 마무리인지. 계통마다 콤보 길이가 다르다.
-  bool get _isFinisher => _comboStep == weapon.weaponClass.comboLength - 1;
+  ///
+  /// **나머지로 접는 것이 요점이다.** 휘두르는 도중에 무기가 바뀔 수 있고
+  /// (레벨업으로 계통이 갈리거나 더 센 무기를 줍거나), 콤보 길이는 계통마다
+  /// 1~4로 다르다. 그냥 견주면 4타짜리 탈론의 3단계에서 2타짜리 리퍼로 갈린
+  /// 순간 이번 타가 마무리가 아닌 것이 되어, 이미 세 번을 채워 얻은 ×1.6 이
+  /// 무기가 바뀌었다는 이유로 사라진다.
+  bool get _isFinisher {
+    final length = weapon.weaponClass.comboLength;
+    return _comboStep % length == length - 1;
+  }
 
   /// 한 발에 드는 마력.
   ///
@@ -527,13 +537,11 @@ class Player extends IsoEntity with Damageable {
       state = moveInput.length2 > 0.001 ? PlayerState.run : PlayerState.idle;
       return;
     }
-    // 스윙 중반에 한 번만 판정한다. 망치는 머리가 바닥에 닿는 순간이라 늦다 —
-    // 그림이 그 시점을 그리므로 판정도 같은 값을 읽어야 한다.
+    // 스윙 중 언제 맞는지는 계통이 정한다. 망치는 머리가 바닥에 닿는 순간,
+    // 드라이버는 말뚝이 다 나간 순간이라 늦다 — 그림이 그 시점을 그리므로
+    // 판정도 같은 값을 읽어야 한다([WeaponClass.hitAt]).
     final progress = 1 - (_meleeTimer / _meleeSpan);
-    final hitAt = weapon.weaponClass == WeaponClass.maul
-        ? WeaponArt.maulImpact
-        : 0.35;
-    if (!_meleeHitApplied && progress >= hitAt) {
+    if (!_meleeHitApplied && progress >= weapon.weaponClass.hitAt) {
       _meleeHitApplied = true;
       _resolveMeleeHit();
     }
@@ -579,8 +587,8 @@ class Player extends IsoEntity with Damageable {
     }
 
     if (hitAny) {
-      // 망치의 착탄은 그 자체가 사건이라 흔들림을 한 단 더 준다.
-      final heavy = finisher || weapon.weaponClass == WeaponClass.maul;
+      // 무게로 때리는 계통의 착탄은 그 자체가 사건이라 흔들림을 한 단 더 준다.
+      final heavy = finisher || weapon.weaponClass.heavy;
       game.shakeCamera(heavy ? 8 : 4, 0.12);
       energy = math.min(maxEnergy, energy + 4);
       GameAudio.play(finisher ? Sfx.meleeCrit : Sfx.meleeHit);
@@ -904,16 +912,19 @@ class Player extends IsoEntity with Damageable {
     _applyGains(gains);
     xpToNextLevel = LevelSystem.xpToNext(level);
 
-    // 레벨업 한 번은 곧 무기 강화 한 번이다. 등급까지 바뀌었는지는 새 무기와
-    // 옛 무기를 견줘서 안다 — 경계 레벨을 여기서 다시 세면 표와 어긋난다.
+    // 레벨업 한 번은 곧 무기 강화 한 번이다. 그 위에 눈에 보이는 사건이 둘
+    // 더 있다 — 등급이 오르거나(이름·색·날의 수) 계통이 갈리거나(싸우는 방식
+    // 자체). 어느 쪽이든 새 무기와 옛 무기를 견줘서 안다. 경계 레벨을 여기서
+    // 다시 세면 표와 어긋난다.
     //
     // 견주는 것은 **실제로 손에 든 무기**다. 주운 무기가 아직 더 세다면 기본
-    // 무기의 등급이 올라도 화면의 칼은 그대로이므로, 그때 "무기가 바뀌었다"고
+    // 무기가 무엇으로 바뀌든 화면의 칼은 그대로이므로, 그때 "무기가 바뀌었다"고
     // 알리면 바뀌지 않은 것을 알리는 셈이 된다.
     final held = weapon;
     _innate = WeaponSystem.forLevel(level);
     final forged = weapon;
-    final gradeUp = forged.gradeIndex != held.gradeIndex;
+    final weaponChanged = forged.gradeIndex != held.gradeIndex ||
+        forged.weaponClass != held.weaponClass;
 
     // 레벨업하면 완전히 회복하고 잠깐 무적이 된다.
     _hp = _maxHp;
@@ -928,9 +939,9 @@ class Player extends IsoEntity with Damageable {
         color: GamePalette.xpGlow,
       ),
     );
-    // 새 등급의 무기는 그 무기 색으로 한 번 더 터뜨린다. 경험치 보라색만
-    // 쓰면 등급이 바뀐 순간과 그냥 레벨이 오른 순간이 구분되지 않는다.
-    if (gradeUp) {
+    // 새 무기는 그 무기 색으로 한 번 더 터뜨린다. 경험치 보라색만 쓰면
+    // 무기가 바뀐 순간과 그냥 레벨이 오른 순간이 구분되지 않는다.
+    if (weaponChanged) {
       game.spawnEffect(
         HitSpark(
           grid: grid.clone(),
@@ -943,7 +954,11 @@ class Player extends IsoEntity with Damageable {
     }
     GameAudio.play(Sfx.levelUp);
     // 배너와 화면 흔들림 등 연출은 게임 본체가 담당한다.
-    game.onLevelUp(level, milestone: gains.milestone, weaponGradeUp: gradeUp);
+    game.onLevelUp(
+      level,
+      milestone: gains.milestone,
+      weaponChanged: weaponChanged,
+    );
   }
 
   // ── 렌더링 ──────────────────────────────────────────────────────────

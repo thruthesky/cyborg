@@ -18,7 +18,7 @@ class CharacterScreen extends PositionComponent
 
   /// 기준 해상도에서의 패널 크기. 화면이 좁으면 통째로 축소한다.
   static const double panelWidth = 440;
-  static const double panelHeight = 446;
+  static const double panelHeight = 478;
 
   bool _open = false;
   double _anim = 0;
@@ -203,6 +203,7 @@ class CharacterScreen extends PositionComponent
     _renderIdentity(canvas);
     _renderVitals(canvas);
     _renderColumns(canvas);
+    _renderWeapon(canvas);
     _renderBuffs(canvas);
   }
 
@@ -420,8 +421,44 @@ class CharacterScreen extends PositionComponent
     }
   }
 
+  /// 지금 든 무기. 레벨업마다 강화되므로 성장의 얼굴 노릇을 한다.
+  ///
+  /// 이름 옆에 위력 배율과 사거리를 함께 적는 이유는, 위 COMBAT 칸의 근접·원거리
+  /// 피해가 이미 이 배율이 곱해진 값이기 때문이다. 배율을 숨기면 "왜 저 숫자가
+  /// 나오는지" 를 화면 어디에서도 확인할 수 없다.
+  void _renderWeapon(Canvas canvas) {
+    final weapon = game.player.weapon;
+    const top = 414.0;
+    const nameLeft = 88.0;
+
+    _section.render(canvas, 'WEAPON', Vector2(24, top));
+
+    // 오른쪽의 배율·사거리 표기가 차지하고 남는 폭이 이름의 자리다. 주운
+    // 무기는 벼림과 계통이 이름에 붙어(`APEX SINGULARITY MAUL +169`) 여기를
+    // 넘길 수 있으므로, 넘칠 때만 글꼴을 한 단 줄인다.
+    //
+    // 공격 속도를 함께 적는 이유는 계통이 세기와 속도를 맞바꾸기 때문이다.
+    // 배율만 보이면 망치를 든 사람은 자기가 세졌다고, 창을 든 사람은 약해졌다고
+    // 읽는다 — 실제로는 둘 다 초당 피해가 같다.
+    final stats = '×${weapon.power.toStringAsFixed(2)}   '
+        'SPD ×${weapon.weaponClass.speed.toStringAsFixed(2)}   '
+        'REACH ${game.player.meleeReach.toStringAsFixed(2)}';
+    final statsWidth = _label.getLineMetrics(stats).width;
+    final room = panelWidth - 24 - statsWidth - 16 - nameLeft;
+    final renderer =
+        _value.getLineMetrics(weapon.label).width > room ? _chip : _value;
+
+    renderer.render(canvas, weapon.label, Vector2(nameLeft, top - 2));
+    _label.render(
+      canvas,
+      stats,
+      Vector2(panelWidth - 24, top),
+      anchor: Anchor.topRight,
+    );
+  }
+
   void _renderBuffs(Canvas canvas) {
-    const top = 412.0;
+    const top = 444.0;
     _section.render(canvas, 'BUFFS', Vector2(24, top));
 
     final buffs = game.player.buffs.active;

@@ -96,7 +96,11 @@ class EnsureWorldPopulatedArgsDecoder
 }
 
 class EnterWorldArgs {
-  EnterWorldArgs();
+  EnterWorldArgs({required this.gridX, required this.gridY});
+
+  final double gridX;
+
+  final double gridY;
 }
 
 class EnterWorldArgsDecoder implements ReducerArgDecoder<EnterWorldArgs> {
@@ -104,7 +108,9 @@ class EnterWorldArgsDecoder implements ReducerArgDecoder<EnterWorldArgs> {
 
   @override
   EnterWorldArgs decode(BsatnDecoder decoder) {
-    return EnterWorldArgs();
+    final gridX = decoder.readF32();
+    final gridY = decoder.readF32();
+    return EnterWorldArgs(gridX: gridX, gridY: gridY);
   }
 }
 
@@ -154,11 +160,20 @@ class LogoutArgsDecoder implements ReducerArgDecoder<LogoutArgs> {
 }
 
 class MoveToArgs {
-  MoveToArgs({required this.gridX, required this.gridY});
+  MoveToArgs({
+    required this.gridX,
+    required this.gridY,
+    required this.facingX,
+    required this.facingY,
+  });
 
   final double gridX;
 
   final double gridY;
+
+  final double facingX;
+
+  final double facingY;
 }
 
 class MoveToArgsDecoder implements ReducerArgDecoder<MoveToArgs> {
@@ -168,7 +183,14 @@ class MoveToArgsDecoder implements ReducerArgDecoder<MoveToArgs> {
   MoveToArgs decode(BsatnDecoder decoder) {
     final gridX = decoder.readF32();
     final gridY = decoder.readF32();
-    return MoveToArgs(gridX: gridX, gridY: gridY);
+    final facingX = decoder.readF32();
+    final facingY = decoder.readF32();
+    return MoveToArgs(
+      gridX: gridX,
+      gridY: gridY,
+      facingX: facingX,
+      facingY: facingY,
+    );
   }
 }
 
