@@ -39,6 +39,11 @@ dependencies:
   spacetimedb_sdk: ^2.4.0
   shared_preferences: ^2.5.5
 
+  # 절차적 2.5D 아이소메트릭 비주얼 툴킷. 스프라이트 없이 캐릭터·기물·지면을
+  # 코드로 그린다. git submodule 로 packages/provis 에 받아 쓴다.
+  provis:
+    path: packages/provis
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

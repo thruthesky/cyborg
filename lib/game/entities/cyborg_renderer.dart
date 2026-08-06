@@ -1,8 +1,10 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:provis/provis.dart' show Finish, Surface, paintSurface;
 
 import '../palette.dart';
+import '../visual/provis_bridge.dart';
 import 'cyborg_design.dart';
 
 /// [CyborgDesign] 프로필 하나를 캔버스에 그리는 렌더러.
@@ -35,50 +37,30 @@ abstract final class CyborgRenderer {
   /// 머리의 앞뒤 두께 비율. 구에 가까워 몸통보다 덜 납작해진다.
   static const double _headDepthRatio = 0.88;
 
-  // 빛은 화면 **왼쪽 위**에서 온다. 아래 두 셰이딩 함수가 그 방향을 공유하며,
-  // 부위마다 밝은 면을 임의로 칠하면 빛이 여러 곳에서 오는 것처럼 보여
-  // 입체가 무너진다.
+  // 빛은 화면 **왼쪽 위**에서 온다. 모든 부위가 [ProvisBridge.light] 하나를
+  // 공유하며, 부위마다 밝은 면을 임의로 칠하면 빛이 여러 곳에서 오는 것처럼
+  // 보여 입체가 무너진다.
+  //
+  // 예전에는 부위 종류마다 손으로 만든 그라디언트 헬퍼(`_cylinderShade`
+  // ·`_plateShade`)를 썼다. 지금은 전부 provis 의 `paintSurface` 로 옮겼다 —
+  // 같은 광원 리그에서 재질별 알고리즘이 갈리므로, 판금은 하늘·지평선·지면이
+  // 3단으로 비치고 발광체는 가산 합성으로 뜬다. 한 함수가 재질을 흉내 내는
+  // 것과 재질마다 전용 계산을 갖는 것의 차이다.
 
-  /// 원통형 부위(팔·다리·목)에 두르는 3단 명암.
+  /// 기본 디테일.
   ///
-  /// 단색으로 채우면 아무리 실루엣을 다듬어도 "납작한 판"으로 읽힌다.
-  /// 그라디언트 채색은 셰이더 fill 이라 오프스크린 패스가 없어 `MaskFilter`
-  /// 보다 훨씬 싸다 — 입체감을 얻는 가장 값싼 수단이다.
-  ///
-  /// [rect]는 부위를 감싸는 사각형, [base]는 중간 톤이다.
-  static Paint _cylinderShade(Rect rect, Color base, Color light) {
-    return Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.centerLeft,
-        end: Alignment.centerRight,
-        colors: [
-          // 왼쪽에서 빛이 오므로 왼쪽이 밝고, 가운데가 기본, 오른쪽이 그늘.
-          Color.lerp(light, base, 0.15)!,
-          base,
-          Color.lerp(base, _deepShade, 0.55)!,
-        ],
-        stops: const [0.0, 0.46, 1.0],
-      ).createShader(rect);
-  }
+  /// 이 캐릭터는 화면에서 108px 이고 기본 배율에서는 59px 까지 줄어든다.
+  /// provis 의 `detailFor` 도 70px 이하에는 0.25 를 준다 — 그 크기에서 금속
+  /// 스크래치를 전부 그리면 입체감이 아니라 얼룩으로 보이고, 값은 값대로 든다.
+  static const double _defaultDetail = 0.55;
 
-  /// 넓은 판(몸통·헬멧)에 쓰는 사선 4단 명암.
+  /// 지금 그리고 있는 몸의 디테일 수준(0~1).
   ///
-  /// 위에서 비스듬히 받는 빛을 표현한다. 원통보다 단계를 하나 더 두어
-  /// 반사광(아래쪽이 살짝 밝아지는 것)까지 넣는다.
-  static Paint _plateShade(Rect rect, Color base, Color light) {
-    return Paint()
-      ..shader = LinearGradient(
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-        colors: [
-          light,
-          Color.lerp(light, base, 0.62)!,
-          base,
-          Color.lerp(base, _deepShade, 0.5)!,
-        ],
-        stops: const [0.0, 0.3, 0.62, 1.0],
-      ).createShader(rect);
-  }
+  /// 부위를 그리는 함수가 여덟 갈래로 뻗어 있어 인자로 실어 나르면 시그니처가
+  /// 전부 바뀐다. 렌더는 전부 정적 함수이고 한 프레임 안에서 순차로만 도는
+  /// 단일 UI 스레드 작업이므로, [drawBody] 진입부에서 한 번 세우고 부위
+  /// 함수들이 읽는 편이 낫다.
+  static double _detail = _defaultDetail;
 
   /// 사이보그 본체를 그린다.
   ///
@@ -88,6 +70,9 @@ abstract final class CyborgRenderer {
   ///
   /// [baseY]는 상하 반동 오프셋, [swing]은 -1~1 범위의 보행 위상,
   /// [armSwing]은 팔 흔들림이다. [showBlade]가 참이면 등에 멘 블레이드를 그린다.
+  ///
+  /// [detail]은 재질 텍스처의 밀도다. 멀리 있거나 작게 그려지는 몸에는 낮춰
+  /// 준다 — 보이지도 않는 스크래치에 값을 치르지 않기 위해서다.
   static void drawBody(
     Canvas canvas, {
     required CyborgDesign design,
@@ -97,7 +82,9 @@ abstract final class CyborgRenderer {
     bool showBlade = true,
     double armSwing = 0,
     double time = 0,
+    double detail = _defaultDetail,
   }) {
+    _detail = detail.clamp(0.0, 1.0);
     final y = _Levels(design, baseY);
     final view = _View(design, yaw);
     // 코어와 발광 부위가 함께 맥동한다. 정지해 있어도 살아 있어 보인다.
@@ -223,16 +210,28 @@ abstract final class CyborgRenderer {
         ..close();
 
       if (isBack) {
+        // 뒤쪽 다리는 앞쪽 다리에 가려 실루엣만 보인다. 재질을 칠해도 보이지
+        // 않으므로 가장 어두운 톤으로 남겨 앞뒤 관계만 만든다.
         canvas.drawPath(thigh, dark);
         canvas.drawPath(shin, dark);
       } else {
-        // 원통 명암. 왼쪽이 밝고 오른쪽이 그늘이라 다리가 둥글게 읽힌다.
-        final legRect = Rect.fromLTRB(
-          hipX - thighTop, y.hip, hipX + thighTop, footY);
-        final shade = _cylinderShade(
-          legRect, design.armorBase, design.armorLight);
-        canvas.drawPath(thigh, shade);
-        canvas.drawPath(shin, shade);
+        // 사지도 판금이다. provis 의 금속 셰이딩은 원통 그라디언트와 달리
+        // 하늘·지평선·지면이 3단으로 비치므로, 같은 실루엣이 훨씬 단단하게
+        // 읽힌다. `occlusion` 은 다리가 몸통 뒤 평면에 있다는 사실을
+        // 알려 주는 값이다 — 이게 없으면 사지가 몸통 앞에 떠 보인다.
+        final metal = Surface(design.armorBase, Finish.metal, contrast: 1.05);
+        for (final part in [thigh, shin]) {
+          paintSurface(
+            canvas,
+            part,
+            metal,
+            ProvisBridge.light,
+            seed: 71,
+            detail: _detail,
+            rim: false,
+            occlusion: 0.18,
+          );
+        }
       }
 
       // 인공 힘줄이 노출된 프레임은 종아리에 발광 라인을 그린다.
@@ -254,18 +253,30 @@ abstract final class CyborgRenderer {
         width: t * 1.18,
         height: t * 0.66,
       );
-      canvas.drawRRect(
-        RRect.fromRectAndCorners(
-          kneeCap,
-          topLeft: Radius.circular(t * 0.32),
-          topRight: Radius.circular(t * 0.32),
-          bottomLeft: Radius.circular(t * 0.16),
-          bottomRight: Radius.circular(t * 0.16),
-        ),
-        isBack
-            ? dark
-            : _plateShade(kneeCap, design.armorLight, GamePalette.wallTop),
-      );
+      final kneePath = Path()
+        ..addRRect(
+          RRect.fromRectAndCorners(
+            kneeCap,
+            topLeft: Radius.circular(t * 0.32),
+            topRight: Radius.circular(t * 0.32),
+            bottomLeft: Radius.circular(t * 0.16),
+            bottomRight: Radius.circular(t * 0.16),
+          ),
+        );
+      if (isBack) {
+        canvas.drawPath(kneePath, dark);
+      } else {
+        // 무릎판은 다리보다 밝은 금속이라 관절이 끊겨 보인다.
+        paintSurface(
+          canvas,
+          kneePath,
+          Surface(design.armorLight, Finish.metal),
+          ProvisBridge.light,
+          seed: 83,
+          detail: _detail,
+          rim: false,
+        );
+      }
 
       // 부츠
       final boot = Rect.fromLTWH(
@@ -300,12 +311,21 @@ abstract final class CyborgRenderer {
     Paint armor,
   ) {
     final half = view.halfWidth(design.hipWidth);
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTRB(-half, y.waist, half, y.hip + 2),
-        const Radius.circular(3),
-      ),
-      armor,
+    // 골반은 몸통과 다리를 잇는 판이라 둘 사이 톤이 이어져야 한다.
+    paintSurface(
+      canvas,
+      Path()
+        ..addRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTRB(-half, y.waist, half, y.hip + 2),
+            const Radius.circular(3),
+          ),
+        ),
+      Surface(design.armorBase, Finish.metal),
+      ProvisBridge.light,
+      seed: 53,
+      detail: _detail,
+      rim: false,
     );
   }
 
@@ -366,14 +386,24 @@ abstract final class CyborgRenderer {
       )
       ..close();
 
-    // 단색 대신 사선 4단 명암. 위 왼쪽에서 빛을 받아 아래 오른쪽이 그늘진다.
-    canvas.drawPath(
+    // 흉갑은 이 몸에서 면적이 가장 넓어 재질이 가장 잘 읽히는 자리다.
+    // 사선 4단 그라디언트 대신 provis 의 금속 셰이딩을 쓴다 — 하늘·지평선·
+    // 지면이 비치는 3단 환경 밴딩이 생겨 같은 실루엣이 판금으로 읽힌다.
+    //
+    // 여기만 바꾸는 이유는 비용이다. `paintSurface` 는 `saveLayer` 를 쓰지
+    // 않고(`shading.dart` 전체에 0건) `Finish.metal` 경로에는 블러도 없지만,
+    // 그래도 파츠 수 × 화면 안 액터 수로 곱해진다. 팔다리처럼 좁고 매 프레임
+    // 흔들리는 부위는 기존 원통 그라디언트가 더 값싸고 충분하다.
+    paintSurface(
+      canvas,
       path,
-      _plateShade(
-        Rect.fromLTRB(-chest, y.chestTop, chest, y.hip),
-        design.armorBase,
-        design.armorLight,
-      ),
+      Surface(design.armorBase, Finish.metal, contrast: 1.08),
+      ProvisBridge.light,
+      // 스크래치 무늬가 프레임마다 달라지면 갑옷이 끓는다. 고정한다.
+      seed: 17,
+      detail: _detail,
+      // 외곽 발광은 아래에서 직접 그린다. 두 번 두르면 윤곽이 뭉갠다.
+      rim: false,
     );
 
     // 흉갑 하이라이트. 빛을 받는 면이 시선각을 따라 이동한다.
@@ -587,16 +617,26 @@ abstract final class CyborgRenderer {
     pads.sort((a, b) => a.depth.compareTo(b.depth));
 
     for (final s in pads) {
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromCenter(
-            center: Offset(s.x, y.shoulder),
-            width: pad,
-            height: pad * 1.05,
+      // 어깨는 실루엣의 가장 바깥이라 재질이 배경과의 경계를 만든다.
+      paintSurface(
+        canvas,
+        Path()
+          ..addRRect(
+            RRect.fromRectAndRadius(
+              Rect.fromCenter(
+                center: Offset(s.x, y.shoulder),
+                width: pad,
+                height: pad * 1.05,
+              ),
+              Radius.circular(pad * 0.36),
+            ),
           ),
-          Radius.circular(pad * 0.36),
-        ),
-        armorLight,
+        Surface(design.armorLight, Finish.metal),
+        ProvisBridge.light,
+        seed: 41,
+        detail: _detail,
+        rim: false,
+        occlusion: s.depth <= 0 ? 0.30 : 0.0,
       );
 
       // 강습 프레임은 **한쪽 어깨에만** 증설 장갑을 단다. 좌우 대칭 실루엣은
@@ -721,12 +761,22 @@ abstract final class CyborgRenderer {
         )
         ..close();
 
-      final armRect =
-          Rect.fromLTRB(arm.x - upperHalf, armTop, arm.x + upperHalf, handY);
-      final shade =
-          _cylinderShade(armRect, design.armorBase, design.armorLight);
-      canvas.drawPath(upper, shade);
-      canvas.drawPath(fore, shade);
+      // 팔이 몸통 뒤 평면에 있으면 접촉 그림자를 더 준다. 이 값이 없으면
+      // 뒤로 간 팔이 몸통 앞에 떠 보인다.
+      final armMetal = Surface(design.armorBase, Finish.metal, contrast: 1.05);
+      final occ = arm.depth <= 0 ? 0.42 : 0.12;
+      for (final part in [upper, fore]) {
+        paintSurface(
+          canvas,
+          part,
+          armMetal,
+          ProvisBridge.light,
+          seed: 97,
+          detail: _detail,
+          rim: false,
+          occlusion: occ,
+        );
+      }
       // 손목 마디. 팔 끝을 끊어 축소해도 관절이 남게 한다.
       canvas.drawRRect(
         RRect.fromRectAndRadius(
@@ -857,13 +907,17 @@ abstract final class CyborgRenderer {
       )
       ..close();
 
-    canvas.drawPath(
+    // 머리는 시선이 가장 먼저 닿는 곳이라 재질이 가장 크게 값을 한다.
+    // 흉갑과 같은 금속 셰이딩을 써야 한 몸에서 나온 판금으로 읽힌다.
+    paintSurface(
+      canvas,
       helmetPath,
-      _plateShade(
-        Rect.fromLTRB(shellCx - half, top, shellCx + half, bottom),
-        design.armorLight,
-        GamePalette.wallTop,
-      ),
+      Surface(design.armorLight, Finish.metal, contrast: 1.02),
+      ProvisBridge.light,
+      seed: 23,
+      detail: _detail,
+      // 윤곽 발광은 바로 아래에서 직접 두른다.
+      rim: false,
     );
     // 헬멧 윤곽의 림 라이트.
     canvas.drawPath(
@@ -895,13 +949,31 @@ abstract final class CyborgRenderer {
         ),
         Radius.circular(hh * 0.15),
       );
+      // 바깥 후광은 남긴다 — 바이저가 발광체임을 알리는 것은 이 번짐이다.
       canvas.drawRRect(
         visor,
         Paint()
           ..color = design.visorColor
           ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3),
       );
-      canvas.drawRRect(visor, Paint()..color = design.visorColor);
+      // 렌즈 본체는 `gem` 으로 친다. 단색으로 채우면 발광 스티커이지만,
+      // 보석 셰이딩은 내부 반사와 면 분할을 만들어 **들여다보이는 렌즈**가
+      // 된다. 이 얼굴에서 가장 먼저 읽히는 부위이므로 여기에 재질을 쓰는
+      // 값이 가장 크다.
+      paintSurface(
+        canvas,
+        Path()..addRRect(visor),
+        Surface(
+          design.visorColor,
+          Finish.gem,
+          glow: 0.5,
+          glowColor: design.accent,
+        ),
+        ProvisBridge.light,
+        seed: 7,
+        detail: _detail,
+        rim: false,
+      );
       // 바이저를 가로지르는 주사선. 렌즈처럼 보이게 하는 마디다.
       canvas.save();
       canvas.clipRRect(visor);

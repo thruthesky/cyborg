@@ -2,9 +2,11 @@ import 'dart:math' as math;
 
 import 'package:flame/components.dart';
 import 'package:flutter/material.dart';
+import 'package:provis/provis.dart' show Finish, Surface, paintSurface, rimBand;
 
 import '../entities/iso_entity.dart';
 import '../palette.dart';
+import '../visual/provis_bridge.dart';
 
 /// 월드 정중앙 안전지대에 서 있는 큰 나무.
 ///
@@ -166,24 +168,20 @@ class WorldTree extends IsoEntity {
       ..lineTo(top + lean, trunkTop)
       ..quadraticBezierTo(bottom * 0.72, trunkTop * 0.5, bottom, 0)
       ..close();
-    canvas.drawPath(path, Paint()..color = GamePalette.textPrimary);
 
-    // 빛을 받는 왼쪽 면. 2톤으로 나눠야 원통처럼 읽힌다.
-    final litPath = Path()
-      ..moveTo(-bottom, 0)
-      ..quadraticBezierTo(
-        -bottom * 0.72,
-        trunkTop * 0.5,
-        -top + lean,
-        trunkTop,
-      )
-      ..lineTo(-top * 0.1 + lean, trunkTop)
-      ..quadraticBezierTo(-bottom * 0.2, trunkTop * 0.5, -bottom * 0.28, 0)
-      ..close();
-    canvas.drawPath(
-      litPath,
-      Paint()..color = GamePalette.playerArmorLight.withValues(alpha: 0.55),
+    // 줄기는 자란 나무껍질이 아니라 굳은 데이터 기둥이므로 금속으로 친다.
+    // 손으로 칠한 2톤 대신 provis 의 금속 셰이딩을 쓰면 하늘·지평선·지면이
+    // 비치는 3단 환경 밴딩이 생겨, 같은 실루엣이 훨씬 단단해 보인다.
+    paintSurface(
+      canvas,
+      path,
+      const Surface(GamePalette.playerArmor, Finish.metal, contrast: 1.15),
+      ProvisBridge.light,
+      seed: 11,
     );
+    // 밝은 데이터 공간에서는 어두운 줄기가 배경에 먹힌다. 청록 역광 띠 한 겹이
+    // 실루엣을 떼어 놓는다.
+    rimBand(canvas, path, ProvisBridge.light, width: 3);
 
     // 줄기를 타고 오르는 수액 회로.
     final vein = Paint()
@@ -231,7 +229,8 @@ class WorldTree extends IsoEntity {
     final sway = math.sin(_time * 0.9 + leaf.phase) * 2.4 * leaf.sway;
     final center = leaf.center.translate(sway, math.sin(_time * 1.3 + leaf.phase) * 1.1);
 
-    // 바깥 후광 → 본체 → 밝은 윗면. 세 겹이라야 발광하는 잎으로 읽힌다.
+    // 바깥 후광은 그대로 둔다 — 잎 덩어리가 배경에서 떠오르게 하는 것은
+    // 재질이 아니라 이 한 겹이다.
     canvas.drawCircle(
       center,
       leaf.radius * 1.06,
@@ -239,16 +238,30 @@ class WorldTree extends IsoEntity {
         ..color = GamePalette.safeZoneGlow.withValues(alpha: 0.22)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10),
     );
-    canvas.drawCircle(
-      center,
-      leaf.radius,
-      Paint()..color = GamePalette.safeZoneEdge,
+
+    // 본체는 잎이 아니라 **맺힌 데이터 결정**이다. provis 의 `foliage` 는 빛이
+    // 잎을 통과해 반대편이 황록으로 뜨는 처리라 이 세계관에서는 맞지 않고,
+    // `gem` 은 내부 반사와 면 분할을 만들어 "굳은 데이터"로 읽힌다.
+    final body = Path()
+      ..addOval(Rect.fromCircle(center: center, radius: leaf.radius));
+    paintSurface(
+      canvas,
+      body,
+      Surface(
+        GamePalette.safeZoneEdge,
+        Finish.gem,
+        glow: 0.35,
+        glowColor: GamePalette.safeZoneGlow,
+      ),
+      ProvisBridge.light,
+      seed: leaf.phase.hashCode & 0xFFFF,
     );
-    // 위에서 빛을 받는 면.
+
+    // 위에서 빛을 받는 면. 결정 셰이딩 위에 얹어 수관 전체의 방향을 잡는다.
     canvas.drawCircle(
       center.translate(-leaf.radius * 0.22, -leaf.radius * 0.26),
-      leaf.radius * 0.68,
-      Paint()..color = GamePalette.safeZoneFill.withValues(alpha: 0.85),
+      leaf.radius * 0.52,
+      Paint()..color = GamePalette.safeZoneFill.withValues(alpha: 0.55),
     );
   }
 

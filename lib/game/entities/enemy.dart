@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flame/components.dart';
 import 'package:flutter/material.dart';
+import 'package:provis/provis.dart' show Finish, Surface, paintSurface;
 
 import '../audio/game_audio.dart';
 import '../fx/damage_text.dart';
@@ -11,6 +12,7 @@ import '../palette.dart';
 import '../systems/level_system.dart';
 import '../systems/monster_codex.dart';
 import '../systems/monster_population.dart';
+import '../visual/provis_bridge.dart';
 import 'iso_entity.dart';
 import 'projectile.dart';
 
@@ -731,12 +733,93 @@ class Enemy extends IsoEntity with Damageable {
 
   static const double _nameTagRangeSquared = 7.0 * 7.0;
 
-  Paint get _shell => Paint()
-    ..color = Color.lerp(
-      palette.shell,
-      Colors.white,
-      _hitFlash * 0.7,
-    )!;
+  Paint get _shell => Paint()..color = _shellColor;
+
+  /// 지금 이 순간의 외장 색. 피격 점멸이 반영돼 있다.
+  ///
+  /// 점멸은 "맞았다"를 알리는 게임플레이 신호라 재질보다 우선한다. 그래서
+  /// 재질 셰이딩으로 옮길 때도 **색을 먼저 섞고** 그 색으로 셰이딩한다.
+  Color get _shellColor =>
+      Color.lerp(palette.shell, Colors.white, _hitFlash * 0.7)!;
+
+  /// 외장 판을 금속으로 칠한다.
+  ///
+  /// 로봇의 몸은 도장한 판금이므로 단색 fill 보다 환경 밴딩이 있는 쪽이
+  /// 훨씬 기계로 읽힌다. 다만 몬스터는 한 화면에 수십 마리가 오므로 **가장
+  /// 넓은 판 하나에만** 쓴다 — 부품마다 걸면 개체당 비용이 부품 수만큼
+  /// 곱해진다.
+  void _paintShellPlate(
+    Canvas canvas,
+    Path path, {
+    int seed = 5,
+    Color? tone,
+    double occlusion = 0,
+  }) {
+    paintSurface(
+      canvas,
+      path,
+      Surface(
+        tone == null
+            ? _shellColor
+            // 밝은 판·어두운 판도 피격 점멸을 함께 받아야 한 몸으로 번쩍인다.
+            : Color.lerp(tone, Colors.white, _hitFlash * 0.7)!,
+        Finish.metal,
+        contrast: 1.06,
+      ),
+      ProvisBridge.light,
+      seed: seed,
+      // 로봇은 작게 그려지고 수십 마리가 함께 온다. 미세 텍스처는 보이지도
+      // 않으면서 개체 수만큼 곱해지므로 낮춘다.
+      detail: 0.45,
+      // 윤곽 발광은 각 종이 알아서 그린다. 여기서 겹치면 실루엣이 뭉개진다.
+      rim: false,
+      ao: false,
+      occlusion: occlusion,
+    );
+  }
+
+  /// 발광 코어. 로봇이 살아 있다는 유일한 신호다.
+  ///
+  /// `Finish.energy` 는 `BlendMode.plus` 로 가산 합성한다
+  /// (`packages/provis/lib/src/core/shading.dart:636`). 흰빛 데이터 공간에서는
+  /// 조금만 넓어도 흰 덩어리로 날아가므로 **좁은 면적에만** 쓴다.
+  void _paintGlowRect(Canvas canvas, Rect rect) {
+    paintSurface(
+      canvas,
+      Path()..addRect(rect),
+      Surface(
+        palette.energy,
+        Finish.energy,
+        glow: 0.8,
+        glowColor: palette.eye,
+      ),
+      ProvisBridge.light,
+      seed: 3,
+      detail: 0.5,
+      rim: false,
+      ao: false,
+    );
+  }
+
+  /// 사각 판 하나를 금속으로 칠하는 지름길.
+  void _paintShellRect(
+    Canvas canvas,
+    Rect rect, {
+    double radius = 0,
+    int seed = 5,
+    Color? tone,
+    double occlusion = 0,
+  }) {
+    final path = Path()
+      ..addRRect(RRect.fromRectAndRadius(rect, Radius.circular(radius)));
+    _paintShellPlate(
+      canvas,
+      path,
+      seed: seed,
+      tone: tone,
+      occlusion: occlusion,
+    );
+  }
 
   Paint get _shellLight => Paint()
     ..color = Color.lerp(
@@ -829,23 +912,29 @@ class Enemy extends IsoEntity with Damageable {
       ..lineTo(8, 10)
       ..lineTo(-8, 10)
       ..close();
-    canvas.drawPath(body, _shell);
+    _paintShellPlate(canvas, body, seed: 31);
 
     // 상단 장갑
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(-14, -16, 28, 10),
-        const Radius.circular(4),
-      ),
-      _shellLight,
+    _paintShellRect(
+      canvas,
+      const Rect.fromLTWH(-14, -16, 28, 10),
+      radius: 4,
+      seed: 13,
+      tone: palette.shellLight,
     );
 
     // 센서
     _drawEye(canvas, const Offset(5, -2), 3.4);
 
     // 측면 부스터
-    canvas.drawRect(Rect.fromLTWH(-22, -6, 6, 9), _shellDark);
-    canvas.drawRect(Rect.fromLTWH(16, -6, 6, 9), _shellDark);
+    for (final x in [-22.0, 16.0]) {
+      _paintShellRect(
+        canvas,
+        Rect.fromLTWH(x, -6, 6, 9),
+        seed: 17,
+        tone: palette.shellDark,
+      );
+    }
     final thrust = 0.5 + math.sin(_animTime * 18) * 0.5;
     canvas.drawCircle(
       Offset(-19, 5),
@@ -876,20 +965,24 @@ class Enemy extends IsoEntity with Damageable {
     for (var i = 0; i < 2; i++) {
       final phaseSign = i == 0 ? swing : -swing;
       final legX = i == 0 ? -9.0 : 9.0;
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH(legX - 4, baseY - 36, 8, 22),
-          const Radius.circular(3),
-        ),
-        i == 0 ? _shellDark : _shell,
+      // 허벅지는 좌우가 다른 톤이라 두 다리가 겹쳐도 앞뒤가 읽힌다.
+      _paintShellRect(
+        canvas,
+        Rect.fromLTWH(legX - 4, baseY - 36, 8, 22),
+        radius: 3,
+        seed: 61,
+        tone: i == 0 ? palette.shellDark : null,
+        occlusion: i == 0 ? 0.35 : 0,
       );
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH(legX - 4 + phaseSign * 4, baseY - 16, 8, 14),
-          const Radius.circular(3),
-        ),
-        _shellDark,
+      _paintShellRect(
+        canvas,
+        Rect.fromLTWH(legX - 4 + phaseSign * 4, baseY - 16, 8, 14),
+        radius: 3,
+        seed: 67,
+        tone: palette.shellDark,
+        occlusion: 0.2,
       );
+      // 발은 지면과 닿는 면이라 반사가 거의 없다. 단색으로 둔다.
       canvas.drawRRect(
         RRect.fromRectAndRadius(
           Rect.fromLTWH(legX - 7 + phaseSign * 4, baseY - 4, 15, 5),
@@ -900,25 +993,27 @@ class Enemy extends IsoEntity with Damageable {
     }
 
     // 몸통
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(-15, baseY - 66, 30, 32),
-        const Radius.circular(5),
-      ),
-      _shell,
+    _paintShellPlate(
+      canvas,
+      Path()
+        ..addRRect(
+          RRect.fromRectAndRadius(
+            Rect.fromLTWH(-15, baseY - 66, 30, 32),
+            const Radius.circular(5),
+          ),
+        ),
+      seed: 47,
     );
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(-11, baseY - 62, 14, 18),
-        const Radius.circular(3),
-      ),
-      _shellLight,
+    _paintShellRect(
+      canvas,
+      Rect.fromLTWH(-11, baseY - 62, 14, 18),
+      radius: 3,
+      seed: 73,
+      tone: palette.shellLight,
     );
-    // 흉부 발광 코어
-    canvas.drawRect(
-      Rect.fromLTWH(-4, baseY - 54, 14, 4),
-      Paint()..color = palette.energy.withValues(alpha: 0.9),
-    );
+    // 흉부 발광 코어. `energy` 는 가산 합성이라 좁은 면적에만 쓴다 —
+    // 넓게 칠하면 밝은 데이터 공간에서 통째로 하얗게 날아간다.
+    _paintGlowRect(canvas, Rect.fromLTWH(-4, baseY - 54, 14, 4));
 
     // 팔(공격 모션에 따라 들어올림)
     final armLift = switch (phase) {
@@ -1007,27 +1102,29 @@ class Enemy extends IsoEntity with Damageable {
       ..lineTo(20, baseY - 38)
       ..lineTo(-20, baseY - 38)
       ..close();
-    canvas.drawPath(torso, _shell);
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(-18, baseY - 74, 22, 24),
-        const Radius.circular(4),
-      ),
-      _shellLight,
+    _paintShellPlate(canvas, torso, seed: 59);
+    _paintShellRect(
+      canvas,
+      Rect.fromLTWH(-18, baseY - 74, 22, 24),
+      radius: 4,
+      seed: 101,
+      tone: palette.shellLight,
     );
 
     // 어깨 캐논
     final charging = phase == EnemyPhase.telegraph || phase == EnemyPhase.strike;
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(12, baseY - 84, 26, 16),
-        const Radius.circular(4),
-      ),
-      _shellDark,
+    _paintShellRect(
+      canvas,
+      Rect.fromLTWH(12, baseY - 84, 26, 16),
+      radius: 4,
+      seed: 103,
+      tone: palette.shellDark,
     );
-    canvas.drawRect(
+    _paintShellRect(
+      canvas,
       Rect.fromLTWH(34, baseY - 80, 14, 8),
-      _shellLight,
+      seed: 107,
+      tone: palette.shellLight,
     );
     if (charging) {
       final charge = phase == EnemyPhase.telegraph
@@ -1043,21 +1140,20 @@ class Enemy extends IsoEntity with Damageable {
     }
 
     // 반대쪽 어깨 장갑
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(-38, baseY - 82, 20, 22),
-        const Radius.circular(6),
-      ),
-      _shellLight,
+    _paintShellRect(
+      canvas,
+      Rect.fromLTWH(-38, baseY - 82, 20, 22),
+      radius: 6,
+      seed: 109,
+      tone: palette.shellLight,
     );
 
     // 머리
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(-12, baseY - 96, 24, 18),
-        const Radius.circular(4),
-      ),
-      _shell,
+    _paintShellRect(
+      canvas,
+      Rect.fromLTWH(-12, baseY - 96, 24, 18),
+      radius: 4,
+      seed: 113,
     );
     _drawEye(canvas, Offset(0, baseY - 87), 5);
     // 배기구 발광
@@ -1111,7 +1207,9 @@ class Enemy extends IsoEntity with Damageable {
       ..lineTo(-8, -116)
       ..lineTo(-2, -98)
       ..close();
-    canvas.drawPath(crown, _shellLight);
+    // 지휘관을 지휘관으로 만드는 것은 이 뿔 하나다. 금·발광이 아니라 같은
+    // 판금이되 가장 밝은 톤으로 두어, 색이 아니라 실루엣으로 계급이 읽히게 한다.
+    _paintShellPlate(canvas, crown, seed: 127, tone: palette.shellLight);
   }
 
   /// 머리 위 명판. `Lv.42 사냥개 MK-III` 처럼 레벨과 종 이름을 보여 준다.

@@ -59,6 +59,7 @@ class LevelMap {
   LevelMap._({
     required this.width,
     required this.height,
+    required this.seed,
     required Uint8List tiles,
     required Uint8List blockHeights,
     required Uint8List blockKinds,
@@ -70,6 +71,13 @@ class LevelMap {
 
   final int width;
   final int height;
+
+  /// 이 월드를 만든 시드.
+  ///
+  /// 지형만이 아니라 **지면 장식**도 여기서 파생된다. 값을 보관하지 않으면
+  /// 카메라가 오갈 때마다 청크를 다시 구우면서 얼룩과 기물이 매번 다른
+  /// 자리에 생겨, 같은 땅이 볼 때마다 달라진다.
+  final int seed;
 
   /// 월드 한가운데의 안전지대. 적은 이 구역에 들어올 수 없다.
   final SafeZone safeZone;
@@ -259,7 +267,8 @@ class LevelMap {
     int height = kWorldTiles,
     int? seed,
   }) {
-    final random = math.Random(seed ?? 20260804);
+    final resolvedSeed = seed ?? 20260804;
+    final random = math.Random(resolvedSeed);
     final cells = width * height;
     final tiles = Uint8List(cells)..fillRange(0, cells, _tFloor);
     final blockHeights = Uint8List(cells);
@@ -475,6 +484,7 @@ class LevelMap {
     return LevelMap._(
       width: width,
       height: height,
+      seed: resolvedSeed,
       tiles: tiles,
       blockHeights: blockHeights,
       blockKinds: blockKinds,

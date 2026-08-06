@@ -24,6 +24,7 @@ import 'input/click_move.dart';
 import 'iso.dart';
 import 'level/ground_layer.dart';
 import 'level/level_map.dart';
+import 'level/provis_prop.dart';
 import 'level/safe_zone.dart';
 import 'level/world_tree.dart';
 import 'level/teleport_destinations.dart';
@@ -199,6 +200,13 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
 
   /// 청크 키(cy * chunksX + cx) → 그 청크에서 마운트한 구조물들.
   final Map<int, List<BlockComponent>> _loadedBlocks = {};
+
+  /// 청크 키 → 그 청크에서 마운트한 절차 장식 기물들.
+  ///
+  /// 구조물과 따로 관리하는 이유는 이쪽이 **통행을 막지 않기** 때문이다.
+  /// 서버는 이 기물들을 모르므로 충돌에 끼워 넣으면 클라이언트마다 다른 벽이
+  /// 생긴다.
+  final Map<int, List<ProvisPropComponent>> _loadedProps = {};
 
   /// 지금 살아 움직이는 상주 로봇. 개체 번호로 찾는다.
   final Map<int, Enemy> _activeMonsters = {};
@@ -1443,6 +1451,40 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
       _loadedBlocks[key] = components;
       if (components.isNotEmpty) world.addAll(components);
     }
+
+    _refreshPropStreaming(needed);
+  }
+
+  /// 절차 장식 기물을 구조물과 같은 청크 주기로 싣고 내린다.
+  ///
+  /// 구조물과 한 함수에 두지 않는 것은 수명이 같아도 성격이 다르기 때문이다 —
+  /// 이쪽은 통행에 관여하지 않고, 없어도 게임이 성립한다.
+  void _refreshPropStreaming(Set<int> needed) {
+    _loadedProps.removeWhere((key, components) {
+      if (needed.contains(key)) return false;
+      for (final component in components) {
+        component.removeFromParent();
+      }
+      return true;
+    });
+
+    final field = ProvisPropField(map.seed);
+    for (final key in needed) {
+      if (_loadedProps.containsKey(key)) continue;
+      final cx = key % map.chunksX;
+      final cy = key ~/ map.chunksX;
+      final components = [
+        for (final spec in field.inChunk(
+          cx,
+          cy,
+          walkable: map.isWalkable,
+          inSafeZone: (gx, gy) => map.isInSafeZone(gx, gy, margin: 6),
+        ))
+          ProvisPropComponent(spec),
+      ];
+      _loadedProps[key] = components;
+      if (components.isNotEmpty) world.addAll(components);
+    }
   }
 
   /// 가까워진 상주 로봇을 깨우고, 멀어진 로봇은 다시 잠재운다.
@@ -2150,6 +2192,7 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     inventory.clear();
     _inventoryPanel.close();
     _loadedBlocks.clear();
+    _loadedProps.clear();
     _activeMonsters.clear();
 
     map = LevelMap.generate();
