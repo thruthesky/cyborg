@@ -380,4 +380,4 @@ _metal(...)   → MaskFilter grep 결과 0건 (그라디언트 drawRect 중심)
 - 시각 검수: `CYBORG_SNAPSHOT_DIR` 로 16방향 시트 PNG 를 뽑아 **59px 축소에서도 실루엣과
   두 프레임(VULCAN/WRAITH) 구분이 살아 있음**을 확인. macOS 릴리스 빌드를 띄워 게임 화면
   스크린샷으로 지면·기물·PC 를 확인.
-- 커밋 해시: 아래 참조.
+- 커밋: `7bdb7f4` — 땅에 자국을 내고, 몸에 금속을 입힌다 (cowork: provis-visual-redesign)
