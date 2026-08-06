@@ -6,9 +6,12 @@ import 'package:flutter/material.dart';
 
 import '../action_rpg_game.dart';
 import '../entities/pickup.dart';
+import '../entities/weapon_art.dart';
 import '../level/level_map.dart';
 import '../level/teleport_destinations.dart';
 import '../palette.dart';
+import '../systems/monster_codex.dart';
+import 'world_map_screen.dart';
 
 /// 화면에 고정되어 표시되는 게임 정보 패널.
 class Hud extends PositionComponent with HasGameReference<ActionRpgGame> {
@@ -49,6 +52,30 @@ class Hud extends PositionComponent with HasGameReference<ActionRpgGame> {
           blurRadius: 10,
         ),
       ],
+    ),
+  );
+  /// 무기 이름. 등급이 오르면 `SINGULARITY EDGE +169` 처럼 길어지므로
+  /// 패널 폭(268)에 들어가도록 값 글꼴보다 작게 잡는다.
+  final TextPaint _weaponName = TextPaint(
+    style: const TextStyle(
+      color: GamePalette.textPrimary,
+      fontSize: 12,
+      fontWeight: FontWeight.w800,
+      letterSpacing: 0.6,
+    ),
+  );
+
+  /// 주운 무기는 벼림 이름이 앞에 붙어(`APEX SINGULARITY EDGE +169`) 한 줄이
+  /// 더 길어진다. 그 경우에만 쓰는 작은 글꼴이다.
+  ///
+  /// 이름을 잘라 내지 않는 이유는 잘리는 쪽이 하필 뒤쪽의 `+n` 이기 때문이다 —
+  /// 벼림과 등급이 같은 두 무기를 가르는 것이 그 숫자다.
+  final TextPaint _weaponNameSmall = TextPaint(
+    style: const TextStyle(
+      color: GamePalette.textPrimary,
+      fontSize: 10,
+      fontWeight: FontWeight.w800,
+      letterSpacing: 0.2,
     ),
   );
   final TextPaint _headline = TextPaint(
@@ -102,7 +129,7 @@ class Hud extends PositionComponent with HasGameReference<ActionRpgGame> {
     const panelWidth = 268.0;
 
     final panel = RRect.fromRectAndRadius(
-      const Rect.fromLTWH(left - 8, top - 8, panelWidth, 112),
+      const Rect.fromLTWH(left - 8, top - 8, panelWidth, 132),
       const Radius.circular(10),
     );
     canvas.drawRRect(panel, Paint()..color = GamePalette.hudBackground);
@@ -217,6 +244,53 @@ class Hud extends PositionComponent with HasGameReference<ActionRpgGame> {
 
     _label.render(canvas, 'SCORE', Vector2(barLeft + 126, top + 66));
     _value.render(canvas, '${game.score}', Vector2(barLeft + 126, top + 76));
+
+    _renderWeaponRow(canvas, const Offset(left, top + 96));
+  }
+
+  /// 지금 든 무기. 레벨업마다 강화되므로 상시 HUD 에 자리를 준다.
+  ///
+  /// 캐릭터 화면을 열어야만 보이면 강화된 순간을 놓친 사람은 무기가 자란다는
+  /// 것 자체를 모른 채 사냥한다.
+  void _renderWeaponRow(Canvas canvas, Offset at) {
+    final weapon = game.player.weapon;
+
+    // 등급 색의 무기 글리프. 계통의 실루엣을 그대로 줄여 그리므로, 이름을
+    // 읽지 않아도 색으로 등급이, 모양으로 계통이 구분된다.
+    canvas.save();
+    canvas.translate(at.dx + 3, at.dy + 7);
+    canvas.scale(0.42);
+    canvas.drawCircle(
+      Offset.zero,
+      26,
+      Paint()
+        ..color = weapon.glow.withValues(alpha: 0.4)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 12),
+    );
+    WeaponArt.drawPickup(canvas, weapon.weaponClass, weapon.glow);
+    canvas.restore();
+
+    // 이름이 배율 표기를 밀고 들어오면 글꼴을 한 단 줄인다. 잰 값으로
+    // 고르는 이유는 글꼴마다 글자 폭이 달라 글자 수로는 알 수 없기 때문이다.
+    const nameLeft = 12.0;
+    const nameRight = 246.0;
+    final label = weapon.label;
+    final renderer = _weaponName.getLineMetrics(label).width >
+            nameRight - nameLeft
+        ? _weaponNameSmall
+        : _weaponName;
+    renderer.render(
+      canvas,
+      label,
+      // 작은 글꼴은 한 픽셀 내려야 큰 글꼴과 밑선이 맞는다.
+      Vector2(at.dx + nameLeft, at.dy + (renderer == _weaponName ? 0 : 1)),
+    );
+    _label.render(
+      canvas,
+      '×${weapon.power.toStringAsFixed(2)}',
+      Vector2(at.dx + 252, at.dy + 1),
+      anchor: Anchor.topRight,
+    );
   }
 
   /// 안전지대 안일 때 체력 바 오른쪽 위에 붙는 휴식 배지.
@@ -537,6 +611,53 @@ class Hud extends PositionComponent with HasGameReference<ActionRpgGame> {
       Vector2(origin.dx + _minimapSize, origin.dy + _minimapSize + 12),
       anchor: Anchor.topRight,
     );
+
+    _renderRegionDanger(
+      canvas,
+      Offset(origin.dx + _minimapSize, origin.dy + _minimapSize + 28),
+    );
+  }
+
+  /// 지금 서 있는 구역의 위험 등급.
+  ///
+  /// 주둔 로봇의 레벨은 시작 지점에서 멀어질수록 1에서 200까지 오르는데
+  /// ([MonsterCodex.regionLevel]), 걸어 다니는 동안 그 사실을 알 길이 없었다.
+  /// 레벨 12 요원이 무심코 3분을 걸어 레벨 80 구역에 들어서면, 무엇에 맞아
+  /// 쓰러졌는지도 모른 채 안전지대로 돌아온다. 이 한 줄이 그 경계를 알린다.
+  void _renderRegionDanger(Canvas canvas, Offset rightTop) {
+    final map = game.map;
+    final level = MonsterCodex.regionLevel(
+      (game.player.grid - map.spawn).length,
+      math.max(map.width, map.height) / 2,
+    );
+    final color = WorldMapScreen.bandColorFor(level);
+    final text = '위험도 Lv.$level';
+
+    // 색이 곧 뜻이다. 글자만으로는 200까지 있는 등급의 무게가 읽히지 않는다.
+    final painter = TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          color: color,
+          fontSize: 11,
+          fontWeight: FontWeight.w900,
+          letterSpacing: 0.4,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    final rect = Rect.fromLTWH(
+      rightTop.dx - painter.width - 12,
+      rightTop.dy - 2,
+      painter.width + 12,
+      16,
+    );
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(rect, const Radius.circular(4)),
+      Paint()..color = color.withValues(alpha: 0.14),
+    );
+    painter.paint(canvas, Offset(rect.left + 6, rect.top + 2));
   }
 
   // ── 오버레이 ────────────────────────────────────────────────────────

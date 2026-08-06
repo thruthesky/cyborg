@@ -210,6 +210,8 @@ class _ControlsCard extends StatelessWidget {
     ('대시', 'Shift  ·  L'),
     ('인벤토리', 'I  ·  Tab'),
     ('포션 사용', 'Q  ·  1~6'),
+    ('월드 지도', 'M'),
+    ('소리 설정', 'O  ·  음소거 V'),
     ('일시정지', 'ESC  ·  P'),
   ];
 

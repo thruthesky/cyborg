@@ -7,7 +7,7 @@ import 'package:flutter/material.dart';
 import '../palette.dart';
 
 /// 서브메뉴 한 줄에 그릴 아이콘.
-enum WorldMenuIcon { character, leaderboard, teleport, logout }
+enum WorldMenuIcon { character, leaderboard, map, teleport, sound, logout }
 
 /// 월드 메뉴에서 펼쳐지는 서브메뉴 항목 하나.
 class WorldMenuEntry {
@@ -391,6 +391,31 @@ class WorldMenu extends PositionComponent with TapCallbacks {
           canvas.drawRect(bar, fill);
           canvas.drawRect(bar, stroke);
         }
+      case WorldMenuIcon.map:
+        // 접힌 지도. 가운데 능선이 접힌 자리다.
+        canvas.drawPath(
+          Path()
+            ..moveTo(center.dx - 9, center.dy - 5)
+            ..lineTo(center.dx - 3, center.dy - 8)
+            ..lineTo(center.dx + 3, center.dy - 5)
+            ..lineTo(center.dx + 9, center.dy - 8)
+            ..lineTo(center.dx + 9, center.dy + 5)
+            ..lineTo(center.dx + 3, center.dy + 8)
+            ..lineTo(center.dx - 3, center.dy + 5)
+            ..lineTo(center.dx - 9, center.dy + 8)
+            ..close(),
+          stroke,
+        );
+        canvas.drawLine(
+          Offset(center.dx - 3, center.dy - 8),
+          Offset(center.dx - 3, center.dy + 5),
+          stroke,
+        );
+        canvas.drawLine(
+          Offset(center.dx + 3, center.dy - 5),
+          Offset(center.dx + 3, center.dy + 8),
+          stroke,
+        );
       case WorldMenuIcon.teleport:
         // 아이소메트릭 지면에 열린 마름모 포털과 그리로 빨려 드는 화살표.
         canvas.drawPath(
@@ -414,6 +439,28 @@ class WorldMenu extends PositionComponent with TapCallbacks {
             ..lineTo(center.dx + 4, center.dy - 2),
           stroke,
         );
+      case WorldMenuIcon.sound:
+        // 소리가 퍼져 나가는 스피커.
+        canvas.drawPath(
+          Path()
+            ..moveTo(center.dx - 8, center.dy - 3)
+            ..lineTo(center.dx - 4, center.dy - 3)
+            ..lineTo(center.dx, center.dy - 8)
+            ..lineTo(center.dx, center.dy + 8)
+            ..lineTo(center.dx - 4, center.dy + 3)
+            ..lineTo(center.dx - 8, center.dy + 3)
+            ..close(),
+          stroke,
+        );
+        for (final radius in const [4.0, 7.5]) {
+          canvas.drawArc(
+            Rect.fromCircle(center: center, radius: radius),
+            -math.pi / 3,
+            math.pi * 2 / 3,
+            false,
+            stroke,
+          );
+        }
       case WorldMenuIcon.logout:
         // 열린 문에서 밖으로 향하는 화살표.
         canvas.drawPath(

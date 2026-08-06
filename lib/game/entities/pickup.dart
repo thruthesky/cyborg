@@ -7,8 +7,10 @@ import '../audio/game_audio.dart';
 import '../fx/loot_text.dart';
 import '../palette.dart';
 import '../systems/buff.dart';
+import '../systems/weapon.dart';
 import 'iso_entity.dart';
 import 'player.dart';
+import 'weapon_art.dart';
 
 /// 전리품의 등급. 발광 세기와 착지 연출의 화려함을 결정한다.
 enum LootRarity { common, uncommon, rare }
@@ -48,6 +50,12 @@ enum PickupKind {
 
   /// 스크랩 코어. 회수 즉시 점수가 된다.
   scrapCore,
+
+  /// 무기 상자. 안에 무기 한 자루가 들어 있다([Pickup.weapon]).
+  ///
+  /// 다른 전리품과 달리 종류만으로는 무엇인지 알 수 없다 — 이름도 색도
+  /// 안에 든 무기에서 온다. 회수하면 지금 든 것보다 셀 때만 손에 들린다.
+  weaponCache,
 }
 
 /// 포션을 마셨을 때 실제로 일어나는 일.
@@ -101,9 +109,10 @@ class PickupSpec {
 
   static const Map<PickupKind, PickupSpec> table = {
     // ── 회복 물약 5등급 ─────────────────────────────────────────────────
-    // 회복량은 100·200·300·500·1000 다섯 뿐이고, 몸체 내구도가 10,000이라
-    // 어느 등급도 판세를 뒤집지 못한다. 의도한 설계다 — 큰 체력 풀로 오래
-    // 버티는 것이 주(主)이고 물약은 곁다리다.
+    // 회복량은 100·200·300·500·1000 다섯 뿐이다. 몸체 내구도가 2,500으로
+    // 낮아지면서 최상급 한 병이 40%까지 올라왔지만, 그 한 병은 사실상 구역
+    // 보스 전용이라 사냥 지속 시간을 좌우하지는 못한다 — 큰 체력 풀로 오래
+    // 버티는 것이 주(主)이고 물약은 여전히 곁다리다.
     // 2등급 이상은 드롭 확률을 크게 낮췄다(`drop_table.dart`).
     PickupKind.nanoVial: PickupSpec(
       name: 'REPAIR VIAL',
@@ -195,6 +204,17 @@ class PickupSpec {
       rarity: LootRarity.uncommon,
       radius: 11,
     ),
+    // 무기 상자의 이름과 색은 여기 값이 아니라 안에 든 무기에서 온다
+    // ([Pickup.displayName], [Pickup.color]). 이 줄은 상자가 비어 있을 때의
+    // 바닥값이자, 크기·희귀도처럼 무기와 무관한 값을 담는 자리다.
+    PickupKind.weaponCache: PickupSpec(
+      name: 'WEAPON CACHE',
+      amount: 0,
+      color: GamePalette.playerVisor,
+      unit: '',
+      rarity: LootRarity.rare,
+      radius: 14,
+    ),
   };
 }
 
@@ -208,6 +228,7 @@ class Pickup extends IsoEntity {
     required super.grid,
     required this.kind,
     double? amount,
+    this.weapon,
     Vector2? launchVelocity,
     double launchLift = 2.6,
     this.serverId,
@@ -242,7 +263,17 @@ class Pickup extends IsoEntity {
   /// 즉시 환산형에 실제로 적용될 효과량.
   final double amount;
 
-  Color get color => spec.color;
+  /// [PickupKind.weaponCache] 라면 그 안에 든 무기. 나머지는 null이다.
+  final Weapon? weapon;
+
+  /// 바닥에서 발광하는 색. 무기 상자는 안에 든 무기의 등급색을 띤다.
+  ///
+  /// 등급색을 그대로 쓰는 덕분에, 멀리 떨어진 상자도 색만 보고 지금 든 무기와
+  /// 견줄 수 있다 — 주울 가치가 있는지 판단하는 데 이름을 읽을 필요가 없다.
+  Color get color => weapon?.glow ?? spec.color;
+
+  /// 획득 라벨에 뜨는 이름. 무기 상자는 무기 이름을 그대로 쓴다.
+  String get displayName => weapon?.label ?? spec.name;
 
   // ── 낙하 물리 ──────────────────────────────────────────────────────
   final Vector2 _velocity;
@@ -395,7 +426,15 @@ class Pickup extends IsoEntity {
     if (_collected) return;
 
     final String label;
-    if (spec.isPotion) {
+    final found = weapon;
+    if (found != null) {
+      // 주운 무기는 지금 든 것보다 셀 때만 손에 들린다. 자동 사냥이 바닥의
+      // 전리품을 모조리 빨아들이므로, 집는 대로 갈아 끼우면 잡몹이 떨군
+      // WORN 한 자루에 무기가 도로 약해진다.
+      final equipped = player.equipFoundWeapon(found);
+      label = equipped ? '▲ ${found.label}' : '${found.label}  SALVAGED';
+      if (equipped) game.onWeaponEquipped(found);
+    } else if (spec.isPotion) {
       // 포션은 쓰지 않고 인벤토리에 보관한다.
       if (!game.inventory.add(kind)) return;
       label = '+ ${spec.name}';
@@ -422,7 +461,10 @@ class Pickup extends IsoEntity {
         PickupKind.combatStim =>
           Sfx.pickupHealth,
         PickupKind.energyCell || PickupKind.overchargeCell => Sfx.pickupEnergy,
-        PickupKind.dataChip || PickupKind.scrapCore => Sfx.pickupChip,
+        PickupKind.dataChip ||
+        PickupKind.scrapCore ||
+        PickupKind.weaponCache =>
+          Sfx.pickupChip,
       },
       // 희귀한 전리품일수록 또렷하게 들리도록 한다.
       volumeScale: spec.rarity == LootRarity.rare ? 1.3 : 1.0,
@@ -487,14 +529,23 @@ class Pickup extends IsoEntity {
 
     canvas.save();
     canvas.rotate(math.sin(_life * 2) * 0.25);
-    drawIcon(canvas, kind, color);
+    drawIcon(canvas, kind, color, weaponClass: weapon?.weaponClass);
     canvas.restore();
   }
 
   /// 전리품 아이콘을 원점 기준으로 그린다.
   ///
   /// 월드의 [Pickup]과 인벤토리 UI가 같은 그림을 쓰도록 정적 메서드로 둔다.
-  static void drawIcon(Canvas canvas, PickupKind kind, Color color) {
+  ///
+  /// [weaponClass] 는 무기 상자에만 쓴다. 바닥에 떨어진 것이 칼인지 망치인지
+  /// 창인지가 **주우러 갈지를 정하는 정보**이므로, 상자 껍데기 하나로 뭉뚱그리지
+  /// 않고 안에 든 무기의 실루엣을 그대로 세워 둔다.
+  static void drawIcon(
+    Canvas canvas,
+    PickupKind kind,
+    Color color, {
+    WeaponClass? weaponClass,
+  }) {
     switch (kind) {
       // 회복 물약은 등급이 오를수록 병이 커진다. 바닥에 떨어진 것만 보고도
       // 주우러 갈 가치가 있는지 판단할 수 있어야 한다.
@@ -518,8 +569,15 @@ class Pickup extends IsoEntity {
         _drawChip(canvas, color);
       case PickupKind.scrapCore:
         _drawCore(canvas, color);
+      case PickupKind.weaponCache:
+        WeaponArt.drawPickup(
+          canvas,
+          weaponClass ?? WeaponClass.blade,
+          color,
+        );
     }
   }
+
 
   /// 나노 수리액 병. 십자 마크가 붙은 유리병 형태다.
   static void _drawVial(Canvas canvas, Color color, {double scale = 1.0}) {

@@ -4,6 +4,7 @@ import 'package:flame/components.dart';
 
 import '../iso.dart';
 import '../level/level_map.dart';
+import 'elite.dart';
 import 'monster_codex.dart';
 
 /// 월드에 상주하는 로봇 한 개체의 논리 정보.
@@ -16,6 +17,7 @@ class MonsterSeed {
     required this.species,
     required this.home,
     required this.hpMultiplier,
+    this.elite,
   }) : position = home.clone();
 
   /// 개체 고유 번호. 활성화된 [Enemy]와 시드를 연결하는 열쇠다.
@@ -31,6 +33,12 @@ class MonsterSeed {
   final Vector2 home;
 
   final double hpMultiplier;
+
+  /// 정예 변종. 평범한 개체는 null 이다.
+  ///
+  /// 장부가 들고 있으므로, 멀어져 실체가 사라졌다 다시 깨어나도 **같은 자리의
+  /// 같은 개체는 계속 정예다**. 지나쳤던 그 정예를 다시 찾아갈 수 있어야 한다.
+  final EliteTrait? elite;
 
   /// 마지막으로 관측된 위치. 비활성화될 때 갱신된다.
   Vector2 position;
@@ -194,6 +202,8 @@ class MonsterPopulation {
               home: footing,
               // 종 자체가 레벨을 담고 있으므로 배율은 개체 편차용으로만 쓴다.
               hpMultiplier: 0.95 + random.nextDouble() * 0.2,
+              // 드물게 정예가 섞인다. 깊이 들어갈수록 흔해진다.
+              elite: EliteTrait.roll(random, depth),
             ),
           );
         }

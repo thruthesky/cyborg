@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:spacetimedb_sdk/spacetimedb_sdk.dart';
 
+import 'audio/audio_settings.dart';
 import 'audio/game_audio.dart';
 import 'entities/block.dart';
 import 'entities/enemy.dart';
@@ -40,6 +41,7 @@ import 'systems/hit_stop.dart';
 import 'systems/inventory.dart';
 import 'systems/level_system.dart';
 import 'systems/monster_codex.dart';
+import 'systems/weapon.dart';
 import '../spacetime/reducer_error.dart';
 import 'ui/auto_hunt_control.dart';
 import 'ui/character_screen.dart';
@@ -49,8 +51,10 @@ import 'ui/hud.dart';
 import 'ui/inventory_ui.dart';
 import 'ui/leaderboard_screen.dart';
 import 'ui/mute_button.dart';
+import 'ui/settings_screen.dart';
 import 'ui/teleport_sheet.dart';
 import 'ui/touch_controls.dart';
+import 'ui/world_map_screen.dart';
 import 'ui/world_menu.dart';
 
 /// 게임의 진행 상태.
@@ -130,6 +134,8 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   late CharacterScreen _characterScreen;
   late LeaderboardScreen _leaderboardScreen;
   late TeleportSheet _teleportSheet;
+  late SettingsScreen _settingsScreen;
+  late WorldMapScreen _worldMap;
   late WorldMenu _worldMenu;
 
   /// 소리를 끄고 켜는 버튼. 월드 메뉴 버튼 옆에 선다.
@@ -180,6 +186,11 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
 
   /// 지금 월드에 함께 있는 다른 요원의 수. HUD 가 읽는다.
   int get remotePlayerCount => _remotePlayers.length;
+
+  /// 지금 내 주변에 서 있는 다른 요원들.
+  ///
+  /// 월드 지도가 이 목록을 읽어 지도 위에 점으로 찍는다.
+  Iterable<RemotePlayerEntity> get remotePlayers => _remotePlayers.values;
 
   /// 앵커 주변만 도는 자동 사냥의 상태와 판단을 맡는다.
   ///
@@ -281,6 +292,9 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   Future<void> onLoad() async {
     // 첫 타격에서 소리가 밀리지 않도록 효과음을 미리 올려 둔다.
     await GameAudio.init();
+    // 지난 접속에서 고른 볼륨을 되돌린다. 소리가 나기 전에 걸어야 첫 소리부터
+    // 그 크기로 난다.
+    await AudioSettings.load();
 
     map = LevelMap.generate();
 
@@ -473,6 +487,8 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     _characterScreen = CharacterScreen();
     _leaderboardScreen = LeaderboardScreen(source: leaderboard);
     _teleportSheet = TeleportSheet();
+    _settingsScreen = SettingsScreen();
+    _worldMap = WorldMapScreen();
     _partyPanel = PartyPanel();
     _partyInviteCard = PartyInviteCard();
     _contextActionBar = ContextActionBar();
@@ -494,9 +510,19 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
           onSelected: openLeaderboard,
         ),
         WorldMenuEntry(
+          label: '월드 지도',
+          icon: WorldMenuIcon.map,
+          onSelected: openWorldMap,
+        ),
+        WorldMenuEntry(
           label: '텔레포트',
           icon: WorldMenuIcon.teleport,
           onSelected: openTeleportSheet,
+        ),
+        WorldMenuEntry(
+          label: '소리 설정',
+          icon: WorldMenuIcon.sound,
+          onSelected: openSettingsScreen,
         ),
         // 계정을 붙이지 않은 오프라인 실행에서는 로그아웃할 것이 없다.
         if (onLogout != null)
@@ -521,6 +547,8 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
       _characterScreen,
       _leaderboardScreen,
       _teleportSheet,
+      _settingsScreen,
+      _worldMap,
     ]);
 
     _layoutTouchControls();
@@ -1670,11 +1698,16 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     DropTable table, {
     double luck = 0,
     double amountMultiplier = 1.0,
+    int? weaponLevel,
   }) {
     final results = table.roll(
       _random,
       luck: luck,
       amountMultiplier: amountMultiplier,
+      // 넘기지 않으면 무기 굴림 자체가 일어나지 않는다. 무기를 굴릴 근거가
+      // 없는 자리(웨이브 보상 등)에서 0 레벨 무기가 튀어나오지 않게 하려고
+      // 일부러 그렇게 두었다(`DropTable.roll`).
+      weaponLevel: weaponLevel,
     );
     if (results.isEmpty) return;
 
@@ -1749,9 +1782,11 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
   /// 인벤토리 패널을 열거나 닫는다.
   void toggleInventory() {
     if (status != GameStatus.playing && !_inventoryPanel.isOpen) return;
-    // 인벤토리는 다른 패널과 함께 떠 있어도 되지만, 텔레포트 시트는 화면
-    // 아래를 덮고 입력을 가로채므로 겹쳐 두면 서로 눌리지 않는다.
+    // 인벤토리는 다른 패널과 함께 떠 있어도 되지만, 텔레포트 시트·소리 설정·
+    // 월드 지도는 화면을 덮고 입력을 가로채므로 겹쳐 두면 서로 눌리지 않는다.
     _teleportSheet.close();
+    _settingsScreen.close();
+    _worldMap.close();
     _inventoryPanel.toggle();
     GameAudio.play(Sfx.uiClick);
   }
@@ -1765,6 +1800,8 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     _inventoryPanel.close();
     _leaderboardScreen.close();
     _teleportSheet.close();
+    _settingsScreen.close();
+    _worldMap.close();
     _characterScreen.open();
     GameAudio.play(Sfx.uiClick);
   }
@@ -1794,6 +1831,8 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     _inventoryPanel.close();
     _characterScreen.close();
     _teleportSheet.close();
+    _settingsScreen.close();
+    _worldMap.close();
     _leaderboardScreen.open();
     GameAudio.play(Sfx.uiClick);
   }
@@ -1823,6 +1862,8 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     _inventoryPanel.close();
     _characterScreen.close();
     _leaderboardScreen.close();
+    _settingsScreen.close();
+    _worldMap.close();
     _teleportSheet.open();
     GameAudio.play(Sfx.uiClick);
   }
@@ -1840,6 +1881,68 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
       closeTeleportSheet();
     } else {
       openTeleportSheet();
+    }
+  }
+
+  /// 월드 지도가 떠 있는지 여부.
+  bool get isWorldMapOpen => _worldMap.isOpen;
+
+  /// 월드 지도를 연다. 다른 전체 화면 패널과는 동시에 뜨지 않는다.
+  void openWorldMap() {
+    if (status != GameStatus.playing) return;
+    _inventoryPanel.close();
+    _characterScreen.close();
+    _leaderboardScreen.close();
+    _teleportSheet.close();
+    _settingsScreen.close();
+    _worldMap.open();
+    GameAudio.play(Sfx.uiClick);
+  }
+
+  /// 월드 지도를 닫는다.
+  void closeWorldMap() {
+    if (!_worldMap.isOpen) return;
+    _worldMap.close();
+    GameAudio.play(Sfx.uiClick);
+  }
+
+  /// 월드 지도를 열거나 닫는다.
+  void toggleWorldMap() {
+    if (_worldMap.isOpen) {
+      closeWorldMap();
+    } else {
+      openWorldMap();
+    }
+  }
+
+  /// 소리 설정 화면이 떠 있는지 여부.
+  bool get isSettingsScreenOpen => _settingsScreen.isOpen;
+
+  /// 소리 설정 화면을 연다. 다른 전체 화면 패널과는 동시에 뜨지 않는다.
+  void openSettingsScreen() {
+    if (status != GameStatus.playing) return;
+    _inventoryPanel.close();
+    _characterScreen.close();
+    _leaderboardScreen.close();
+    _teleportSheet.close();
+    _worldMap.close();
+    _settingsScreen.open();
+    GameAudio.play(Sfx.uiClick);
+  }
+
+  /// 소리 설정 화면을 닫는다.
+  void closeSettingsScreen() {
+    if (!_settingsScreen.isOpen) return;
+    _settingsScreen.close();
+    GameAudio.play(Sfx.uiClick);
+  }
+
+  /// 소리 설정 화면을 열거나 닫는다.
+  void toggleSettingsScreen() {
+    if (_settingsScreen.isOpen) {
+      closeSettingsScreen();
+    } else {
+      openSettingsScreen();
     }
   }
 
@@ -1964,6 +2067,10 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
         DropTables.forEnemy(enemy.build),
         luck: math.min(0.15, enemy.level * 0.0075),
         amountMultiplier: 1 + math.min(0.5, enemy.level * 0.025),
+        // 무기는 **쓰러진 로봇의 레벨**에서 굴린다. 이 인자를 빼면 드롭 표가
+        // 무기 굴림을 통째로 건너뛰므로(`DropTable.roll` 은 레벨이 없으면
+        // 무기를 내지 않는다), 무기 상자가 영영 나오지 않는다.
+        weaponLevel: enemy.level,
       );
     }
 
@@ -2006,7 +2113,10 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
         PickupKind.overchargeCell ||
         PickupKind.combatStim =>
           Sfx.pickupEnergy,
-        PickupKind.dataChip || PickupKind.scrapCore => Sfx.pickupChip,
+        PickupKind.dataChip ||
+        PickupKind.scrapCore ||
+        PickupKind.weaponCache =>
+          Sfx.pickupChip,
       };
 
   /// 플레이어가 피해를 입었을 때 호출된다.
@@ -2014,10 +2124,48 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
     hitStop.trigger(0.06);
   }
 
+  /// 무기를 새로 손에 들었을 때 호출된다.
+  ///
+  /// 주운 무기가 지금 것보다 셀 때만 온다(`Player.equipFoundWeapon`). 못한
+  /// 무기는 회수만 되고 이 알림은 뜨지 않는다 — 안 바뀐 것을 알리는 셈이라.
+  void onWeaponEquipped(Weapon weapon) {
+    _showBanner('▲ WEAPON  ${weapon.label}');
+    shakeCamera(10, 0.28);
+    spawnEffect(
+      HitSpark(
+        grid: player.grid.clone(),
+        z: 0.7,
+        color: weapon.glow,
+        count: 12,
+        spread: 40,
+      ),
+    );
+  }
+
   /// 레벨업 시 호출된다. [milestone]은 5레벨 단위의 강화 구간인지 여부다.
-  void onLevelUp(int level, {bool milestone = false}) {
-    _showBanner(milestone ? 'LEVEL UP  $level  ▲BOOST' : 'LEVEL UP  $level');
-    shakeCamera(milestone ? 10 : 4, milestone ? 0.3 : 0.2);
+  ///
+  /// [weaponChanged]는 등급이 오르거나 계통이 갈려 **손의 무기가 다른 무기가
+  /// 된** 경우다. 5레벨마다 계통이 도므로(`WeaponSystem.innateCycle`) 강화
+  /// 구간과 거의 겹치지만, 주운 무기를 들고 있으면 겹치지 않는다.
+  void onLevelUp(
+    int level, {
+    bool milestone = false,
+    bool weaponChanged = false,
+  }) {
+    // 무기가 바뀐 순간이 가장 큰 사건이다. 레벨 숫자는 캐릭터 화면에도 늘 떠
+    // 있지만, 손에 든 것이 다른 무기가 되는 것은 그때뿐이라 이름을 알린다.
+    //
+    // 이름은 `label` 이 아니라 `title` 이다. 벼린 횟수(`+7`)까지 붙으면 정작
+    // 바뀐 것 — 어떤 무기가 되었는지 — 이 숫자에 묻힌다.
+    if (weaponChanged) {
+      _showBanner('▲ WEAPON  ${player.weapon.title}');
+    } else {
+      _showBanner(milestone ? 'LEVEL UP  $level  ▲BOOST' : 'LEVEL UP  $level');
+    }
+    shakeCamera(
+      weaponChanged ? 14 : (milestone ? 10 : 4),
+      weaponChanged ? 0.36 : (milestone ? 0.3 : 0.2),
+    );
     // 서버에 올리는 것은 누적 하나다. 레벨은 서버가 거기서 다시 계산한다.
     sync?.reportLevel(level, player.totalXp);
   }
@@ -2201,9 +2349,19 @@ class ActionRpgGame extends FlameGame with HasKeyboardHandlerComponents {
           toggleCharacterScreen();
         case LogicalKeyboardKey.keyB:
           toggleLeaderboard();
+        case LogicalKeyboardKey.keyM:
+          toggleWorldMap();
+        case LogicalKeyboardKey.keyO:
+          toggleSettingsScreen();
+        case LogicalKeyboardKey.keyV:
+          toggleMute();
         case LogicalKeyboardKey.escape:
           // 떠 있는 창이 있으면 먼저 닫는다.
-          if (_teleportSheet.isOpen) {
+          if (_worldMap.isOpen) {
+            closeWorldMap();
+          } else if (_settingsScreen.isOpen) {
+            closeSettingsScreen();
+          } else if (_teleportSheet.isOpen) {
             closeTeleportSheet();
           } else if (_leaderboardScreen.isOpen) {
             closeLeaderboard();
